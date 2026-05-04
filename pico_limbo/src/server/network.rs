@@ -165,12 +165,14 @@ async fn process_packet(
             }
         }
         let username = client_state.get_username();
+        let entity_id = client_state.entity_id();
         debug!(
-            "{} joined using version {}",
+            "{} joined using version {} with entity id {}",
             username,
-            protocol_version.humanize()
+            protocol_version.humanize(),
+            entity_id
         );
-        info!("{} joined the game", username,);
+        info!("{} joined the game with entity id {}", username, entity_id);
     }
 
     let mut stream = batch.into_stream();
