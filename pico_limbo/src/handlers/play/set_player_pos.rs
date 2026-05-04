@@ -15,7 +15,8 @@ impl PacketHandler for SetPlayerPositionPacket {
         Ok(teleport_player_to_spawn_out_of_bounds(
             client_state,
             server_state,
-            self.feet_y,
+            self.position(),
+            None,
         ))
     }
 }

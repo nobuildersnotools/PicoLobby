@@ -6,3 +6,9 @@
 node_modules/
 *.zst
 .DS_Store
+.AGENTS.md
+.CLAUDE.md
+/.claude
+/.codex
+server.toml
+/docs/lobby/

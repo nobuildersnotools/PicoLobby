@@ -32,6 +32,15 @@ impl EncodePacket for LoginPacketData {
 }
 
 impl LoginPacket {
+    pub const fn entity_id(&self) -> i32 {
+        self.entity_id
+    }
+
+    pub const fn set_entity_id(mut self, entity_id: i32) -> Self {
+        self.entity_id = entity_id;
+        self
+    }
+
     /// This is the constructor for version 1.16.2 up to 1.18.2 included
     pub fn with_dimension_codec(
         dimension: Dimension,

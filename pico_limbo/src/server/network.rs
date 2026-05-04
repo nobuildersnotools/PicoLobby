@@ -158,7 +158,12 @@ async fn process_packet(
 
     if !*was_in_play_state && state == State::Play {
         *was_in_play_state = true;
-        server_state.write().await.increment();
+        {
+            let server_state_guard = server_state.read().await;
+            if !server_state_guard.lobby_enabled() {
+                server_state_guard.increment();
+            }
+        }
         let username = client_state.get_username();
         debug!(
             "{} joined using version {}",
@@ -238,8 +243,19 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
     let _ = client_data.shutdown().await;
 
     if was_in_play_state {
-        server_state.write().await.decrement();
-        let username = client_data.client().await.get_username();
+        let client_state = client_data.client().await;
+        let username = client_state.get_username();
+        let lobby_session_id = client_state.lobby_session_id();
+        drop(client_state);
+
+        {
+            let server_state_guard = server_state.read().await;
+            if server_state_guard.lobby_enabled() {
+                server_state_guard.unregister_lobby_session(lobby_session_id);
+            } else {
+                server_state_guard.decrement();
+            }
+        }
         info!("{} left the game", username);
     }
 }

@@ -1,4 +1,5 @@
 use crate::server::game_profile::GameProfile;
+use crate::server_state::LobbySessionId;
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
 use tracing::info;
@@ -19,7 +20,10 @@ impl Default for ClientState {
             message_id: -1,
             game_profile: None,
             keep_alive_enabled: KeepAliveStatus::Disabled,
-            feet_y: 0.0,
+            entity_id: 0,
+            lobby_session_id: None,
+            position: (0.0, 0.0, 0.0),
+            rotation: (0.0, 0.0),
             is_flight_allowed: false,
             is_flying: false,
             flying_speed: 0.05,
@@ -34,7 +38,10 @@ pub struct ClientState {
     message_id: i32,
     game_profile: Option<GameProfile>,
     keep_alive_enabled: KeepAliveStatus,
-    feet_y: f64,
+    entity_id: i32,
+    lobby_session_id: Option<LobbySessionId>,
+    position: (f64, f64, f64),
+    rotation: (f32, f32),
     is_flight_allowed: bool,
     is_flying: bool,
     flying_speed: f32,
@@ -124,6 +131,28 @@ impl ClientState {
             .and_then(|profile| profile.textures().cloned())
     }
 
+    // Entity
+
+    pub const fn entity_id(&self) -> i32 {
+        self.entity_id
+    }
+
+    pub const fn set_entity_id(&mut self, entity_id: i32) {
+        self.entity_id = entity_id;
+    }
+
+    pub const fn lobby_session_id(&self) -> Option<LobbySessionId> {
+        self.lobby_session_id
+    }
+
+    pub const fn set_lobby_session_id(&mut self, session_id: LobbySessionId) {
+        self.lobby_session_id = Some(session_id);
+    }
+
+    pub const fn clear_lobby_session_id(&mut self) {
+        self.lobby_session_id = None;
+    }
+
     // Keep alive
 
     pub fn should_enable_keep_alive(&self) -> bool {
@@ -145,11 +174,23 @@ impl ClientState {
     // Position
 
     pub const fn get_y_position(&self) -> f64 {
-        self.feet_y
+        self.position.1
     }
 
-    pub const fn set_feet_position(&mut self, feet_y: f64) {
-        self.feet_y = feet_y;
+    pub const fn position(&self) -> (f64, f64, f64) {
+        self.position
+    }
+
+    pub const fn set_position(&mut self, position: (f64, f64, f64)) {
+        self.position = position;
+    }
+
+    pub const fn rotation(&self) -> (f32, f32) {
+        self.rotation
+    }
+
+    pub const fn set_rotation(&mut self, rotation: (f32, f32)) {
+        self.rotation = rotation;
     }
 
     // Movement

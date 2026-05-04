@@ -123,6 +123,39 @@ fn world_position_to_chunk_position(
     Ok((chunk_x, chunk_z))
 }
 
+type PreparedChunkPackets = ((i32, i32), CircularChunkPacketIterator);
+
+fn prepare_chunk_packets(
+    protocol_version: ProtocolVersion,
+    view_distance: i32,
+    dimension: ProtocolDimension,
+    position: (f64, f64),
+    server_state: &ServerState,
+) -> Result<Option<PreparedChunkPackets>, PacketHandlerError> {
+    if !protocol_version.is_after_inclusive(ProtocolVersion::V1_16) {
+        return Ok(None);
+    }
+
+    let registry_provider = PrecomputedRegistries::new(protocol_version);
+    let center_chunk = world_position_to_chunk_position(position)?;
+    let biome_id = registry_provider
+        .get_biome_protocol_id(&Identifier::vanilla_unchecked("plains"))
+        .unwrap_or(1); // Plains biome ID is 1 before 1.13
+    let dimension_info = registry_provider.get_dimension_info(to_registry_dimension(dimension))?;
+
+    Ok(Some((
+        center_chunk,
+        CircularChunkPacketIterator::new(
+            center_chunk,
+            view_distance,
+            server_state.world(),
+            i32::try_from(biome_id)?,
+            &dimension_info,
+            protocol_version,
+        ),
+    )))
+}
+
 impl From<SchematicError> for PacketHandlerError {
     fn from(value: SchematicError) -> Self {
         Self::Custom(value.to_string())
@@ -138,7 +171,10 @@ pub fn send_play_packets(
     let view_distance = server_state.view_distance();
     let dimension = server_state.spawn_dimension();
     let reduced_debug_info = server_state.reduced_debug_info();
-    let registry_provider = PrecomputedRegistries::new(protocol_version);
+    let (x, y, z) = server_state.spawn_position();
+    let (yaw, pitch) = server_state.spawn_rotation();
+    client_state.set_position((x, y, z));
+    client_state.set_rotation((yaw, pitch));
 
     let game_mode = {
         let expected_game_mode = server_state.game_mode();
@@ -151,7 +187,7 @@ pub fn send_play_packets(
         }
     };
 
-    let packet = build_login_packet(protocol_version, dimension)?
+    let login_packet = build_login_packet(protocol_version, dimension)?
         .set_game_mode(
             protocol_version,
             game_mode.value(),
@@ -159,6 +195,18 @@ pub fn send_play_packets(
         )
         .set_view_distance(view_distance)
         .set_reduced_debug_info(reduced_debug_info);
+
+    let chunk_packets = prepare_chunk_packets(
+        protocol_version,
+        view_distance,
+        dimension,
+        (x, z),
+        server_state,
+    )?;
+
+    server_state.register_lobby_session(client_state);
+
+    let packet = login_packet.set_entity_id(client_state.entity_id());
     batch.queue(|| PacketRegistry::Login(Box::new(packet)));
 
     let is_flying = game_mode == GameMode::Spectator;
@@ -173,7 +221,6 @@ pub fn send_play_packets(
     client_state.set_is_flight_allowed(allow_flying);
     client_state.set_is_flying(is_flying);
 
-    let (x, y, z) = server_state.spawn_position();
     if protocol_version.is_after_inclusive(ProtocolVersion::V1_19) {
         // Send Set Default Spawn Position
         let packet = SetDefaultSpawnPositionPacket::new(dimension, x, y, z);
@@ -181,10 +228,8 @@ pub fn send_play_packets(
     }
 
     // Send Synchronize Player Position
-    let (yaw, pitch) = server_state.spawn_rotation();
     let packet = SynchronizePlayerPositionPacket::new(x, y, z, yaw, pitch);
     batch.queue(|| PacketRegistry::SynchronizePlayerPosition(packet));
-    client_state.set_feet_position(y);
 
     if protocol_version.is_after_inclusive(ProtocolVersion::V1_13) {
         send_commands_packet(batch, protocol_version, server_state);
@@ -216,34 +261,19 @@ pub fn send_play_packets(
         send_boss_bar_packets(batch, server_state);
     }
 
-    if protocol_version.is_after_inclusive(ProtocolVersion::V1_16) {
+    if let Some((center_chunk, iter)) = chunk_packets {
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_20_3) {
             // Send Game Event
             let packet = GameEventPacket::start_waiting_for_chunks(0.0);
             batch.queue(|| PacketRegistry::GameEvent(packet));
         }
 
-        let center_chunk = world_position_to_chunk_position((x, z))?;
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_19) {
             let packet = SetCenterChunkPacket::new(center_chunk.0, center_chunk.1);
             batch.queue(|| PacketRegistry::SetCenterChunk(packet));
         }
 
         // Send Chunk Data and Update Light
-        let biome_id = registry_provider
-            .get_biome_protocol_id(&Identifier::vanilla_unchecked("plains"))
-            .unwrap_or(1); // Plains biome ID is 1 before 1.13
-        let dimension_info =
-            registry_provider.get_dimension_info(to_registry_dimension(dimension))?;
-
-        let iter = CircularChunkPacketIterator::new(
-            center_chunk,
-            view_distance,
-            server_state.world(),
-            i32::try_from(biome_id)?,
-            &dimension_info,
-            protocol_version,
-        );
         batch.chain_iter(iter);
     }
 
@@ -391,7 +421,7 @@ fn send_skin_packets(
 
     // There are no skin layers before 1.8 so no need to send this packet
     if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
-        let packet = SetEntityMetadataPacket::skin_layers(0);
+        let packet = SetEntityMetadataPacket::skin_layers(client_state.entity_id());
         batch.queue(|| PacketRegistry::SetEntityMetadata(packet));
     }
 }
@@ -453,11 +483,23 @@ pub fn send_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::server::game_profile::GameProfile;
     use futures::StreamExt;
+    use minecraft_protocol::prelude::Uuid;
 
     fn server_state() -> ServerState {
         let mut builder = ServerState::builder();
         builder.view_distance(0).welcome_message("Hello, World!");
+        builder.build().unwrap()
+    }
+
+    fn lobby_server_state() -> ServerState {
+        let mut builder = ServerState::builder();
+        builder
+            .view_distance(0)
+            .welcome_message("Hello, World!")
+            .set_lobby_enabled(true)
+            .show_online_player_count(true);
         builder.build().unwrap()
     }
 
@@ -470,6 +512,12 @@ mod tests {
             State::Login
         };
         cs.set_state(previous_state);
+        cs
+    }
+
+    fn lobby_client(protocol: ProtocolVersion, username: &str, uuid: Uuid) -> ClientState {
+        let mut cs = client(protocol);
+        cs.set_game_profile(GameProfile::new(username, uuid, None));
         cs
     }
 
@@ -530,6 +578,57 @@ mod tests {
             PacketRegistry::ChunkDataAndUpdateLight(_)
         ));
         assert!(batch.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_limbo_join_keeps_default_entity_id() {
+        let mut client_state = client(ProtocolVersion::V1_20_3);
+        let server_state = server_state();
+        let mut batch = Batch::new();
+
+        send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
+        let mut batch = batch.into_stream();
+
+        let PacketRegistry::Login(packet) = batch.next().await.unwrap() else {
+            panic!("expected login packet");
+        };
+        assert_eq!(packet.entity_id(), 0);
+        assert_eq!(client_state.entity_id(), 0);
+        assert_eq!(server_state.online_players(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_lobby_join_assigns_unique_entity_ids_and_counts_sessions() {
+        let server_state = lobby_server_state();
+        let mut first = lobby_client(ProtocolVersion::V1_20_3, "First", Uuid::from_u128(1));
+        let mut second = lobby_client(ProtocolVersion::V1_20_3, "Second", Uuid::from_u128(2));
+
+        let mut first_batch = Batch::new();
+        send_play_packets(&mut first_batch, &mut first, &server_state).unwrap();
+        let mut second_batch = Batch::new();
+        send_play_packets(&mut second_batch, &mut second, &server_state).unwrap();
+
+        assert_eq!(first.entity_id(), 1);
+        assert_eq!(second.entity_id(), 2);
+        assert_eq!(server_state.online_players(), 2);
+
+        let PacketRegistry::Login(first_login) = first_batch.into_stream().next().await.unwrap()
+        else {
+            panic!("expected first login packet");
+        };
+        let PacketRegistry::Login(second_login) = second_batch.into_stream().next().await.unwrap()
+        else {
+            panic!("expected second login packet");
+        };
+        assert_eq!(first_login.entity_id(), 1);
+        assert_eq!(second_login.entity_id(), 2);
+
+        assert!(
+            server_state
+                .unregister_lobby_session_by_entity_id(first.entity_id())
+                .is_some()
+        );
+        assert_eq!(server_state.online_players(), 1);
     }
 
     #[tokio::test]

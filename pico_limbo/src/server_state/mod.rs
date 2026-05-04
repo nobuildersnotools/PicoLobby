@@ -1,8 +1,12 @@
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
+use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
 use base64::{Engine, alphabet, engine};
+pub use lobby::{
+    EntityId, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
+};
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
@@ -12,12 +16,13 @@ use std::fs::File;
 use std::io::Read;
 use std::num::TryFromIntError;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use thiserror::Error;
 use tracing::debug;
 
+mod lobby;
 mod server_commands;
 
 #[derive(Clone)]
@@ -89,6 +94,8 @@ pub struct ServerState {
     max_players: u32,
     welcome_message: Option<Component>,
     connected_clients: Arc<AtomicU32>,
+    lobby_enabled: bool,
+    lobby_state: Arc<Mutex<LobbyState>>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -159,10 +166,14 @@ impl ServerState {
 
     /// Returns the current number of connected clients.
     pub fn online_players(&self) -> u32 {
-        if self.show_online_player_count {
-            self.connected_clients.load(Ordering::SeqCst)
+        if !self.show_online_player_count {
+            return 0;
+        }
+
+        if self.lobby_enabled {
+            u32::try_from(self.lobby_state().len()).unwrap_or(u32::MAX)
         } else {
-            0
+            self.connected_clients.load(Ordering::SeqCst)
         }
     }
 
@@ -262,6 +273,84 @@ impl ServerState {
         &self.server_commands
     }
 
+    pub const fn lobby_enabled(&self) -> bool {
+        self.lobby_enabled
+    }
+
+    pub fn register_lobby_session(&self, client_state: &mut ClientState) -> Option<LobbySession> {
+        if !self.lobby_enabled {
+            client_state.set_entity_id(0);
+            client_state.clear_lobby_session_id();
+            return None;
+        }
+
+        let (x, y, z) = client_state.position();
+        let (yaw, pitch) = client_state.rotation();
+        let session = LobbySession::new(
+            client_state.get_unique_id(),
+            client_state.get_username(),
+            client_state.get_textures(),
+            client_state.protocol_version(),
+            LobbyPosition::new(x, y, z, yaw, pitch),
+        );
+        let session = self.lobby_state().insert(session);
+        client_state.set_entity_id(session.entity_id.get());
+        client_state.set_lobby_session_id(session.session_id);
+        Some(session)
+    }
+
+    pub fn unregister_lobby_session(
+        &self,
+        session_id: Option<LobbySessionId>,
+    ) -> Option<LobbySession> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        self.lobby_state().remove_by_session_id(session_id?)
+    }
+
+    #[allow(dead_code)]
+    pub fn unregister_lobby_session_by_entity_id(&self, entity_id: i32) -> Option<LobbySession> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        self.lobby_state()
+            .remove_by_entity_id(EntityId::new(entity_id))
+    }
+
+    pub fn update_lobby_position(&self, client_state: &ClientState) -> bool {
+        if !self.lobby_enabled {
+            return false;
+        }
+
+        let (x, y, z) = client_state.position();
+        let (yaw, pitch) = client_state.rotation();
+        self.lobby_state().update_position(
+            EntityId::new(client_state.entity_id()),
+            LobbyPosition::new(x, y, z, yaw, pitch),
+        )
+    }
+
+    #[allow(dead_code)]
+    pub fn plan_lobby_recipients(
+        &self,
+        exclude_session_id: Option<LobbySessionId>,
+    ) -> Vec<LobbyRecipient> {
+        if !self.lobby_enabled {
+            return Vec::new();
+        }
+
+        self.lobby_state().plan_recipients(exclude_session_id)
+    }
+
+    fn lobby_state(&self) -> MutexGuard<'_, LobbyState> {
+        self.lobby_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn increment(&self) {
         self.connected_clients.fetch_add(1, Ordering::SeqCst);
     }
@@ -281,6 +370,7 @@ pub struct ServerStateBuilder {
     description_text: String,
     max_players: u32,
     welcome_message: String,
+    lobby_enabled: bool,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -395,6 +485,11 @@ impl ServerStateBuilder {
 
     pub const fn show_online_player_count(&mut self, show: bool) -> &mut Self {
         self.show_online_player_count = show;
+        self
+    }
+
+    pub const fn set_lobby_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.lobby_enabled = enabled;
         self
     }
 
@@ -598,6 +693,8 @@ impl ServerStateBuilder {
             welcome_message: optional_mini_message(&self.welcome_message)?,
             action_bar: self.action_bar,
             connected_clients: Arc::new(AtomicU32::new(0)),
+            lobby_enabled: self.lobby_enabled,
+            lobby_state: Arc::new(Mutex::new(LobbyState::new())),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
             hardcore: self.hardcore,
@@ -652,4 +749,119 @@ where
     let elapsed = start.elapsed();
     debug!("Time elapsed: {}", format_duration(elapsed));
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::game_profile::GameProfile;
+    use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
+
+    fn client(username: &str, uuid: Uuid) -> ClientState {
+        let mut client = ClientState::default();
+        client.set_protocol_version(ProtocolVersion::V1_20_5);
+        client.set_game_profile(GameProfile::new(username, uuid, None));
+        client.set_position((1.0, 2.0, 3.0));
+        client.set_rotation((90.0, 45.0));
+        client
+    }
+
+    fn server_state(lobby_enabled: bool) -> ServerState {
+        let mut builder = ServerState::builder();
+        builder
+            .set_lobby_enabled(lobby_enabled)
+            .show_online_player_count(true);
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn disabled_lobby_uses_legacy_count_and_has_no_recipients() {
+        let server_state = server_state(false);
+        let mut client = client("first", Uuid::from_u128(1));
+
+        assert!(server_state.register_lobby_session(&mut client).is_none());
+        assert_eq!(client.entity_id(), 0);
+        assert_eq!(client.lobby_session_id(), None);
+        assert!(server_state.plan_lobby_recipients(None).is_empty());
+
+        server_state.increment();
+        server_state.increment();
+        assert_eq!(server_state.online_players(), 2);
+
+        server_state.decrement();
+        assert_eq!(server_state.online_players(), 1);
+    }
+
+    #[test]
+    fn enabled_lobby_plans_owned_recipient_snapshots() {
+        let server_state = server_state(true);
+        let first_uuid = Uuid::from_u128(1);
+        let second_uuid = Uuid::from_u128(2);
+        let mut first = client("first", first_uuid);
+        let mut second = client("second", second_uuid);
+
+        let first_session = server_state.register_lobby_session(&mut first).unwrap();
+        let second_session = server_state.register_lobby_session(&mut second).unwrap();
+        assert_eq!(first.lobby_session_id(), Some(first_session.session_id));
+        assert_eq!(second.lobby_session_id(), Some(second_session.session_id));
+
+        let recipients = server_state.plan_lobby_recipients(first.lobby_session_id());
+        assert_eq!(
+            recipients,
+            vec![LobbyRecipient {
+                session_id: second_session.session_id,
+                uuid: second_uuid,
+                entity_id: second_session.entity_id,
+                protocol_version: ProtocolVersion::V1_20_5,
+            }]
+        );
+
+        assert!(
+            server_state
+                .unregister_lobby_session(second.lobby_session_id())
+                .is_some()
+        );
+        assert_eq!(server_state.online_players(), 1);
+
+        assert_eq!(recipients[0].entity_id, second_session.entity_id);
+        assert_eq!(
+            server_state.plan_lobby_recipients(first.lobby_session_id()),
+            Vec::new()
+        );
+
+        assert!(
+            server_state
+                .unregister_lobby_session(first.lobby_session_id())
+                .is_some()
+        );
+        assert_eq!(server_state.online_players(), 0);
+    }
+
+    #[test]
+    fn stale_lobby_session_handle_does_not_unregister_replacement() {
+        let server_state = server_state(true);
+        let uuid = Uuid::from_u128(1);
+        let mut first = client("first", uuid);
+        let mut replacement = client("replacement", uuid);
+
+        let first_session = server_state.register_lobby_session(&mut first).unwrap();
+        let replacement_session = server_state
+            .register_lobby_session(&mut replacement)
+            .unwrap();
+
+        assert_ne!(first_session.session_id, replacement_session.session_id);
+        assert!(
+            server_state
+                .unregister_lobby_session(first.lobby_session_id())
+                .is_none()
+        );
+        assert_eq!(server_state.online_players(), 1);
+
+        assert!(
+            server_state
+                .unregister_lobby_session(replacement.lobby_session_id())
+                .is_some()
+        );
+        assert_eq!(server_state.online_players(), 0);
+    }
 }

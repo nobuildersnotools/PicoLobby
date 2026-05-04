@@ -18,7 +18,8 @@ impl PacketHandler for SetPlayerPositionAndRotationPacket {
         Ok(teleport_player_to_spawn_out_of_bounds(
             client_state,
             server_state,
-            self.feet_y,
+            (self.x, self.feet_y, self.z),
+            Some((self.yaw, self.pitch)),
         ))
     }
 }
@@ -26,29 +27,33 @@ impl PacketHandler for SetPlayerPositionAndRotationPacket {
 pub fn teleport_player_to_spawn_out_of_bounds(
     client_state: &mut ClientState,
     server_state: &ServerState,
-    feet_y: f64,
+    position: (f64, f64, f64),
+    rotation: Option<(f32, f32)>,
 ) -> Batch<PacketRegistry> {
     let mut batch = Batch::new();
+    let previous_position = client_state.get_y_position();
+    client_state.set_position(position);
+    if let Some(rotation) = rotation {
+        client_state.set_rotation(rotation);
+    }
+    server_state.update_lobby_position(client_state);
+
     if let Some(Boundaries {
         teleport_message,
         min_y,
     }) = server_state.boundaries()
     {
-        let previous_position = client_state.get_y_position();
-        client_state.set_feet_position(feet_y);
+        let feet_y = position.1;
 
         if feet_y < f64::from(*min_y) {
             let difference = (previous_position - feet_y).abs();
 
             if previous_position >= f64::from(*min_y) && difference <= FALL_SPEED {
-                let y = server_state.spawn_position().1;
                 teleport_player_to_spawn(client_state, server_state, &mut batch);
 
                 if let Some(content) = teleport_message {
                     send_message(&mut batch, content, client_state.protocol_version());
                 }
-
-                client_state.set_feet_position(y);
             }
         }
     }
@@ -65,7 +70,9 @@ pub fn teleport_player_to_spawn(
     let packet = SynchronizePlayerPositionPacket::new(x, y, z, yaw, pitch);
     batch.queue(|| PacketRegistry::SynchronizePlayerPosition(packet));
 
-    client_state.set_feet_position(y);
+    client_state.set_position((x, y, z));
+    client_state.set_rotation((yaw, pitch));
+    server_state.update_lobby_position(client_state);
 }
 
 #[cfg(test)]
@@ -100,7 +107,12 @@ mod tests {
         let server_state = server_state_with_min_y(0, Some("Direct teleport test".to_string()));
 
         // When
-        let batch = teleport_player_to_spawn_out_of_bounds(&mut client_state, &server_state, -1.0);
+        let batch = teleport_player_to_spawn_out_of_bounds(
+            &mut client_state,
+            &server_state,
+            (0.0, -1.0, 0.0),
+            None,
+        );
         let mut batch = batch.into_stream();
 
         // Then
@@ -122,7 +134,12 @@ mod tests {
         let server_state = server_state_with_min_y(0, None);
 
         // When
-        let batch = teleport_player_to_spawn_out_of_bounds(&mut client_state, &server_state, -1.0);
+        let batch = teleport_player_to_spawn_out_of_bounds(
+            &mut client_state,
+            &server_state,
+            (0.0, -1.0, 0.0),
+            None,
+        );
         let mut batch = batch.into_stream();
 
         // Then
@@ -140,7 +157,12 @@ mod tests {
         let server_state = server_state_with_min_y(0, None);
 
         // When
-        let batch = teleport_player_to_spawn_out_of_bounds(&mut client_state, &server_state, 10.0);
+        let batch = teleport_player_to_spawn_out_of_bounds(
+            &mut client_state,
+            &server_state,
+            (0.0, 10.0, 0.0),
+            None,
+        );
         let mut batch = batch.into_stream();
 
         // Then
@@ -152,21 +174,23 @@ mod tests {
         // Given
         const STARTING_POSITION: f64 = 1.0;
         let mut client_state = client_state();
-        client_state.set_feet_position(STARTING_POSITION);
+        client_state.set_position((0.0, STARTING_POSITION, 0.0));
         let server_state = server_state_with_min_y(0, None);
 
         // When
         let mut stream1 = teleport_player_to_spawn_out_of_bounds(
             &mut client_state,
             &server_state,
-            STARTING_POSITION,
+            (0.0, STARTING_POSITION, 0.0),
+            None,
         )
         .into_stream();
 
         let mut stream2 = teleport_player_to_spawn_out_of_bounds(
             &mut client_state,
             &server_state,
-            STARTING_POSITION - FALL_SPEED,
+            (0.0, STARTING_POSITION - FALL_SPEED, 0.0),
+            None,
         )
         .into_stream();
 
@@ -174,7 +198,12 @@ mod tests {
             teleport_player_to_spawn_out_of_bounds(
                 &mut client_state,
                 &server_state,
-                FALL_SPEED.mul_add(-f64::from(i), STARTING_POSITION),
+                (
+                    0.0,
+                    FALL_SPEED.mul_add(-f64::from(i), STARTING_POSITION),
+                    0.0,
+                ),
+                None,
             )
             .into_stream()
         });
