@@ -5,10 +5,12 @@ use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
 use base64::{Engine, alphabet, engine};
 pub use lobby::{
-    EntityId, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
+    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPosition,
+    LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
+use net::raw_packet::RawPacket;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
 pub use server_commands::{ServerCommand, ServerCommands};
@@ -20,6 +22,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tracing::debug;
 
 mod lobby;
@@ -299,15 +302,16 @@ impl ServerState {
         Some(session)
     }
 
-    pub fn unregister_lobby_session(
+    pub fn unregister_lobby_session_with_leave_plan(
         &self,
         session_id: Option<LobbySessionId>,
-    ) -> Option<LobbySession> {
+    ) -> Option<LobbyLeavePlan> {
         if !self.lobby_enabled {
             return None;
         }
 
-        self.lobby_state().remove_by_session_id(session_id?)
+        self.lobby_state()
+            .remove_by_session_id_with_leave_plan(session_id?)
     }
 
     #[allow(dead_code)]
@@ -331,6 +335,71 @@ impl ServerState {
             EntityId::new(client_state.entity_id()),
             LobbyPosition::new(x, y, z, yaw, pitch),
         )
+    }
+
+    pub fn update_lobby_position_with_movement_plan(
+        &self,
+        client_state: &ClientState,
+    ) -> Option<LobbyMovementPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        let (x, y, z) = client_state.position();
+        let (yaw, pitch) = client_state.rotation();
+        self.lobby_state().update_position_with_movement_plan(
+            EntityId::new(client_state.entity_id()),
+            LobbyPosition::new(x, y, z, yaw, pitch),
+        )
+    }
+
+    pub fn update_lobby_crouching_with_metadata_plan(
+        &self,
+        client_state: &ClientState,
+        crouching: bool,
+    ) -> Option<LobbyMetadataPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        self.lobby_state()
+            .update_crouching_with_metadata_plan(EntityId::new(client_state.entity_id()), crouching)
+    }
+
+    pub fn plan_lobby_join(&self, session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+        self.lobby_state().plan_join_visibility(session_id)
+    }
+
+    pub fn set_lobby_broadcast_sender(
+        &self,
+        session_id: LobbySessionId,
+        sender: mpsc::UnboundedSender<RawPacket>,
+    ) {
+        if !self.lobby_enabled {
+            return;
+        }
+        self.lobby_state().set_broadcast_sender(session_id, sender);
+    }
+
+    pub fn collect_lobby_broadcast_senders(
+        &self,
+        recipients: &[LobbyRecipient],
+    ) -> Vec<(LobbySessionId, mpsc::UnboundedSender<RawPacket>)> {
+        if !self.lobby_enabled {
+            return Vec::new();
+        }
+        let lobby = self.lobby_state();
+        recipients
+            .iter()
+            .filter_map(|r| {
+                lobby
+                    .get_broadcast_sender(r.session_id)
+                    .map(|s| (r.session_id, s))
+            })
+            .collect()
     }
 
     #[allow(dead_code)]
@@ -818,7 +887,7 @@ mod tests {
 
         assert!(
             server_state
-                .unregister_lobby_session(second.lobby_session_id())
+                .unregister_lobby_session_with_leave_plan(second.lobby_session_id())
                 .is_some()
         );
         assert_eq!(server_state.online_players(), 1);
@@ -831,7 +900,7 @@ mod tests {
 
         assert!(
             server_state
-                .unregister_lobby_session(first.lobby_session_id())
+                .unregister_lobby_session_with_leave_plan(first.lobby_session_id())
                 .is_some()
         );
         assert_eq!(server_state.online_players(), 0);
@@ -852,14 +921,14 @@ mod tests {
         assert_ne!(first_session.session_id, replacement_session.session_id);
         assert!(
             server_state
-                .unregister_lobby_session(first.lobby_session_id())
+                .unregister_lobby_session_with_leave_plan(first.lobby_session_id())
                 .is_none()
         );
         assert_eq!(server_state.online_players(), 1);
 
         assert!(
             server_state
-                .unregister_lobby_session(replacement.lobby_session_id())
+                .unregister_lobby_session_with_leave_plan(replacement.lobby_session_id())
                 .is_some()
         );
         assert_eq!(server_state.online_players(), 0);

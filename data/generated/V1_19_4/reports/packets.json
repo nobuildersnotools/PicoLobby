@@ -35,6 +35,24 @@
   },
   "play": {
     "clientbound": {
+      "minecraft:add_player": {
+        "protocol_id": 3
+      },
+      "minecraft:boss_event": {
+        "protocol_id": 11
+      },
+      "minecraft:commands": {
+        "protocol_id": 16
+      },
+      "minecraft:custom_payload": {
+        "protocol_id": 23
+      },
+      "minecraft:destroy_entities": {
+        "protocol_id": 62
+      },
+      "minecraft:disconnect": {
+        "protocol_id": 26
+      },
       "minecraft:keep_alive": {
         "protocol_id": 35
       },
@@ -44,44 +62,44 @@
       "minecraft:login": {
         "protocol_id": 40
       },
-      "minecraft:player_position": {
-        "protocol_id": 60
+      "minecraft:move_entity_pos": {
+        "protocol_id": 43
       },
-      "minecraft:set_default_spawn_position": {
-        "protocol_id": 80
+      "minecraft:move_entity_pos_rot": {
+        "protocol_id": 44
       },
-      "minecraft:custom_payload": {
-        "protocol_id": 23
+      "minecraft:move_entity_rot": {
+        "protocol_id": 45
       },
-      "minecraft:system_chat": {
-        "protocol_id": 100
-      },
-      "minecraft:commands": {
-        "protocol_id": 16
-      },
-      "minecraft:disconnect": {
-        "protocol_id": 26
-      },
-      "minecraft:set_chunk_cache_center": {
-        "protocol_id": 78
-      },
-      "minecraft:set_time": {
-        "protocol_id": 94
-      },
-      "minecraft:tab_list": {
-        "protocol_id": 101
+      "minecraft:player_abilities": {
+        "protocol_id": 52
       },
       "minecraft:player_info_update": {
         "protocol_id": 58
       },
+      "minecraft:player_position": {
+        "protocol_id": 60
+      },
+      "minecraft:rotate_head": {
+        "protocol_id": 66
+      },
+      "minecraft:set_action_bar_text": {
+        "protocol_id": 70
+      },
+      "minecraft:set_chunk_cache_center": {
+        "protocol_id": 78
+      },
+      "minecraft:set_default_spawn_position": {
+        "protocol_id": 80
+      },
       "minecraft:set_entity_data": {
         "protocol_id": 82
       },
-      "minecraft:boss_event": {
-        "protocol_id": 11
-      },
       "minecraft:set_subtitle_text": {
         "protocol_id": 93
+      },
+      "minecraft:set_time": {
+        "protocol_id": 94
       },
       "minecraft:set_title_text": {
         "protocol_id": 95
@@ -89,11 +107,14 @@
       "minecraft:set_titles_animation": {
         "protocol_id": 96
       },
-      "minecraft:set_action_bar_text": {
-        "protocol_id": 70
+      "minecraft:system_chat": {
+        "protocol_id": 100
       },
-      "minecraft:player_abilities": {
-        "protocol_id": 52
+      "minecraft:tab_list": {
+        "protocol_id": 101
+      },
+      "minecraft:teleport_entity": {
+        "protocol_id": 104
       }
     },
     "serverbound": {
@@ -111,6 +132,9 @@
       },
       "minecraft:player_abilities": {
         "protocol_id": 28
+      },
+      "minecraft:player_command": {
+        "protocol_id": 30
       }
     }
   },

@@ -1,6 +1,8 @@
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
+use net::raw_packet::RawPacket;
 use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct EntityId(i32);
@@ -17,7 +19,7 @@ impl EntityId {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LobbySessionId(u64);
 
 impl LobbySessionId {
@@ -63,14 +65,12 @@ pub enum LobbySessionLifecycle {
 pub struct LobbySession {
     pub session_id: LobbySessionId,
     pub uuid: Uuid,
-    #[allow(dead_code)]
     pub username: String,
-    #[allow(dead_code)]
     pub textures: Option<Property>,
-    #[allow(dead_code)]
     pub protocol_version: ProtocolVersion,
     pub entity_id: EntityId,
     pub position: LobbyPosition,
+    pub crouching: bool,
     #[allow(dead_code)]
     pub lifecycle: LobbySessionLifecycle,
 }
@@ -91,6 +91,7 @@ impl LobbySession {
             protocol_version,
             entity_id: EntityId::new(0),
             position,
+            crouching: false,
             lifecycle: LobbySessionLifecycle::Joined,
         }
     }
@@ -105,12 +106,45 @@ pub struct LobbyRecipient {
     pub protocol_version: ProtocolVersion,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyLeavePlan {
+    pub departed_uuid: Uuid,
+    pub departed_username: String,
+    pub departed_entity_id: EntityId,
+    pub recipients: Vec<LobbyRecipient>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LobbyMovementPlan {
+    pub moving_session_id: LobbySessionId,
+    pub moving_entity_id: EntityId,
+    pub previous_position: LobbyPosition,
+    pub current_position: LobbyPosition,
+    pub recipients: Vec<LobbyRecipient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyMetadataPlan {
+    pub session_id: LobbySessionId,
+    pub entity_id: EntityId,
+    pub crouching: bool,
+    pub recipients: Vec<LobbyRecipient>,
+}
+
+#[derive(Clone)]
+pub struct LobbyJoinPlan {
+    pub new_session: LobbySession,
+    pub existing_sessions: Vec<LobbySession>,
+    pub existing_recipients: Vec<LobbyRecipient>,
+}
+
 pub struct LobbyState {
     next_session_id: u64,
     next_entity_id: i32,
     sessions_by_uuid: HashMap<Uuid, LobbySession>,
     entity_to_uuid: HashMap<EntityId, Uuid>,
     session_to_uuid: HashMap<LobbySessionId, Uuid>,
+    broadcast_senders: HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>>,
 }
 
 impl LobbyState {
@@ -121,6 +155,7 @@ impl LobbyState {
             sessions_by_uuid: HashMap::new(),
             entity_to_uuid: HashMap::new(),
             session_to_uuid: HashMap::new(),
+            broadcast_senders: HashMap::new(),
         }
     }
 
@@ -144,6 +179,7 @@ impl LobbyState {
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.entity_to_uuid.remove(&session.entity_id);
         self.session_to_uuid.remove(&session.session_id);
+        self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
 
@@ -151,7 +187,22 @@ impl LobbyState {
         let uuid = self.session_to_uuid.remove(&session_id)?;
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.entity_to_uuid.remove(&session.entity_id);
+        self.broadcast_senders.remove(&session_id);
         Some(session)
+    }
+
+    pub fn remove_by_session_id_with_leave_plan(
+        &mut self,
+        session_id: LobbySessionId,
+    ) -> Option<LobbyLeavePlan> {
+        let removed = self.remove_by_session_id(session_id)?;
+        let recipients = self.plan_recipients(None);
+        Some(LobbyLeavePlan {
+            departed_uuid: removed.uuid,
+            departed_username: removed.username,
+            departed_entity_id: removed.entity_id,
+            recipients,
+        })
     }
 
     #[allow(dead_code)]
@@ -159,6 +210,7 @@ impl LobbyState {
         let uuid = self.entity_to_uuid.remove(&entity_id)?;
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.session_to_uuid.remove(&session.session_id);
+        self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
 
@@ -180,14 +232,55 @@ impl LobbyState {
     }
 
     pub fn update_position(&mut self, entity_id: EntityId, position: LobbyPosition) -> bool {
-        let Some(uuid) = self.entity_to_uuid.get(&entity_id) else {
-            return false;
+        self.update_position_with_movement_plan(entity_id, position)
+            .is_some()
+    }
+
+    pub fn update_position_with_movement_plan(
+        &mut self,
+        entity_id: EntityId,
+        position: LobbyPosition,
+    ) -> Option<LobbyMovementPlan> {
+        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let (moving_session_id, previous_position) = {
+            let session = self.sessions_by_uuid.get_mut(uuid)?;
+            let previous_position = session.position;
+            session.position = position;
+            (session.session_id, previous_position)
         };
-        let Some(session) = self.sessions_by_uuid.get_mut(uuid) else {
-            return false;
+
+        let recipients = self.plan_recipients(Some(moving_session_id));
+        Some(LobbyMovementPlan {
+            moving_session_id,
+            moving_entity_id: entity_id,
+            previous_position,
+            current_position: position,
+            recipients,
+        })
+    }
+
+    pub fn update_crouching_with_metadata_plan(
+        &mut self,
+        entity_id: EntityId,
+        crouching: bool,
+    ) -> Option<LobbyMetadataPlan> {
+        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let session_id = {
+            let session = self.sessions_by_uuid.get_mut(uuid)?;
+            if session.crouching == crouching {
+                return None;
+            }
+            session.crouching = crouching;
+            session.session_id
         };
-        session.position = position;
-        true
+
+        let recipients = self.plan_recipients(Some(session_id));
+        Some(LobbyMetadataPlan {
+            session_id,
+            entity_id,
+            crouching,
+            recipients,
+        })
     }
 
     pub fn len(&self) -> usize {
@@ -204,7 +297,8 @@ impl LobbyState {
         &self,
         exclude_session_id: Option<LobbySessionId>,
     ) -> Vec<LobbyRecipient> {
-        self.sessions_by_uuid
+        let mut recipients = self
+            .sessions_by_uuid
             .values()
             .filter(|session| Some(session.session_id) != exclude_session_id)
             .map(|session| LobbyRecipient {
@@ -213,7 +307,45 @@ impl LobbyState {
                 entity_id: session.entity_id,
                 protocol_version: session.protocol_version,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        recipients.sort_by_key(|recipient| recipient.session_id);
+        recipients
+    }
+
+    pub fn plan_join_visibility(&self, new_session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
+        let uuid = self.session_to_uuid.get(&new_session_id)?;
+        let new_session = self.sessions_by_uuid.get(uuid)?.clone();
+
+        let mut existing_sessions: Vec<LobbySession> = self
+            .sessions_by_uuid
+            .values()
+            .filter(|s| s.session_id != new_session_id)
+            .cloned()
+            .collect();
+        existing_sessions.sort_by_key(|s| s.session_id);
+
+        let existing_recipients = self.plan_recipients(Some(new_session_id));
+
+        Some(LobbyJoinPlan {
+            new_session,
+            existing_sessions,
+            existing_recipients,
+        })
+    }
+
+    pub fn set_broadcast_sender(
+        &mut self,
+        session_id: LobbySessionId,
+        sender: mpsc::UnboundedSender<RawPacket>,
+    ) {
+        self.broadcast_senders.insert(session_id, sender);
+    }
+
+    pub fn get_broadcast_sender(
+        &self,
+        session_id: LobbySessionId,
+    ) -> Option<mpsc::UnboundedSender<RawPacket>> {
+        self.broadcast_senders.get(&session_id).cloned()
     }
 
     fn allocate_session_id(&mut self) -> LobbySessionId {
@@ -350,6 +482,47 @@ mod tests {
     }
 
     #[test]
+    fn leave_plan_removes_departed_player_before_collecting_recipients() {
+        let mut state = LobbyState::new();
+        let first = state.insert(session(Uuid::from_u128(1), "first"));
+        let second = state.insert(session(Uuid::from_u128(2), "second"));
+        let third = state.insert(session(Uuid::from_u128(3), "third"));
+
+        let plan = state
+            .remove_by_session_id_with_leave_plan(second.session_id)
+            .unwrap();
+
+        assert_eq!(plan.departed_uuid, second.uuid);
+        assert_eq!(plan.departed_username, "second");
+        assert_eq!(plan.departed_entity_id, second.entity_id);
+        assert_eq!(state.len(), 2);
+        assert!(state.session_by_uuid(second.uuid).is_none());
+        assert!(
+            !plan
+                .recipients
+                .iter()
+                .any(|recipient| recipient.session_id == second.session_id)
+        );
+        assert_eq!(
+            plan.recipients,
+            vec![
+                LobbyRecipient {
+                    session_id: first.session_id,
+                    uuid: first.uuid,
+                    entity_id: first.entity_id,
+                    protocol_version: ProtocolVersion::V1_20_5,
+                },
+                LobbyRecipient {
+                    session_id: third.session_id,
+                    uuid: third.uuid,
+                    entity_id: third.entity_id,
+                    protocol_version: ProtocolVersion::V1_20_5,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn recipient_planning_can_exclude_sender_session() {
         let mut state = LobbyState::new();
         let first_uuid = Uuid::from_u128(1);
@@ -385,5 +558,148 @@ mod tests {
                 .position,
             position
         );
+    }
+
+    #[test]
+    fn movement_plan_updates_position_and_excludes_moving_player() {
+        let mut state = LobbyState::new();
+        let moving = state.insert(session(Uuid::from_u128(1), "moving"));
+        let recipient = state.insert(session(Uuid::from_u128(2), "recipient"));
+        let new_position = LobbyPosition::new(5.0, 6.0, 7.0, 180.0, 12.0);
+
+        let plan = state
+            .update_position_with_movement_plan(moving.entity_id, new_position)
+            .unwrap();
+
+        assert_eq!(plan.moving_session_id, moving.session_id);
+        assert_eq!(plan.moving_entity_id, moving.entity_id);
+        assert_eq!(plan.previous_position, moving.position);
+        assert_eq!(plan.current_position, new_position);
+        assert_eq!(
+            plan.recipients,
+            vec![LobbyRecipient {
+                session_id: recipient.session_id,
+                uuid: recipient.uuid,
+                entity_id: recipient.entity_id,
+                protocol_version: ProtocolVersion::V1_20_5,
+            }]
+        );
+        assert_eq!(
+            state
+                .session_by_entity_id(moving.entity_id)
+                .unwrap()
+                .position,
+            new_position
+        );
+    }
+
+    #[test]
+    fn metadata_plan_updates_crouching_and_excludes_sender() {
+        let mut state = LobbyState::new();
+        let moving = state.insert(session(Uuid::from_u128(1), "moving"));
+        let recipient = state.insert(session(Uuid::from_u128(2), "recipient"));
+
+        let plan = state
+            .update_crouching_with_metadata_plan(moving.entity_id, true)
+            .unwrap();
+
+        assert_eq!(plan.session_id, moving.session_id);
+        assert_eq!(plan.entity_id, moving.entity_id);
+        assert!(plan.crouching);
+        assert_eq!(
+            plan.recipients,
+            vec![LobbyRecipient {
+                session_id: recipient.session_id,
+                uuid: recipient.uuid,
+                entity_id: recipient.entity_id,
+                protocol_version: ProtocolVersion::V1_20_5,
+            }]
+        );
+        assert!(
+            state
+                .session_by_entity_id(moving.entity_id)
+                .unwrap()
+                .crouching
+        );
+    }
+
+    #[test]
+    fn metadata_plan_is_empty_when_crouching_state_does_not_change() {
+        let mut state = LobbyState::new();
+        let moving = state.insert(session(Uuid::from_u128(1), "moving"));
+
+        assert!(
+            state
+                .update_crouching_with_metadata_plan(moving.entity_id, false)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn join_plan_returns_none_for_unknown_session() {
+        let state = LobbyState::new();
+        assert!(
+            state
+                .plan_join_visibility(LobbySessionId::new(99))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn join_plan_contains_new_session_and_existing_sessions() {
+        let mut state = LobbyState::new();
+        let first = state.insert(session(Uuid::from_u128(1), "first"));
+        let second = state.insert(session(Uuid::from_u128(2), "second"));
+
+        let plan = state
+            .plan_join_visibility(second.session_id)
+            .expect("plan should exist");
+
+        assert_eq!(plan.new_session.session_id, second.session_id);
+        assert_eq!(plan.existing_sessions.len(), 1);
+        assert_eq!(plan.existing_sessions[0].session_id, first.session_id);
+        assert_eq!(plan.existing_recipients.len(), 1);
+        assert_eq!(plan.existing_recipients[0].session_id, first.session_id);
+    }
+
+    #[test]
+    fn join_plan_excludes_new_session_from_existing_recipients() {
+        let mut state = LobbyState::new();
+        let first = state.insert(session(Uuid::from_u128(1), "first"));
+        let second = state.insert(session(Uuid::from_u128(2), "second"));
+        let third = state.insert(session(Uuid::from_u128(3), "third"));
+
+        let plan = state
+            .plan_join_visibility(second.session_id)
+            .expect("plan should exist");
+
+        assert_eq!(plan.new_session.session_id, second.session_id);
+        assert_eq!(plan.existing_sessions.len(), 2);
+        assert!(
+            !plan
+                .existing_recipients
+                .iter()
+                .any(|r| r.session_id == second.session_id)
+        );
+        let session_ids: Vec<_> = plan
+            .existing_recipients
+            .iter()
+            .map(|r| r.session_id)
+            .collect();
+        assert!(session_ids.contains(&first.session_id));
+        assert!(session_ids.contains(&third.session_id));
+    }
+
+    #[test]
+    fn join_plan_for_solo_player_has_empty_existing() {
+        let mut state = LobbyState::new();
+        let solo = state.insert(session(Uuid::from_u128(1), "solo"));
+
+        let plan = state
+            .plan_join_visibility(solo.session_id)
+            .expect("plan should exist");
+
+        assert!(plan.existing_sessions.is_empty());
+        assert!(plan.existing_recipients.is_empty());
     }
 }

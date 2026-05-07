@@ -36,7 +36,9 @@ pub fn teleport_player_to_spawn_out_of_bounds(
     if let Some(rotation) = rotation {
         client_state.set_rotation(rotation);
     }
-    server_state.update_lobby_position(client_state);
+    if let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state) {
+        client_state.set_pending_movement_plan(plan);
+    }
 
     if let Some(Boundaries {
         teleport_message,

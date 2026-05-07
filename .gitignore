@@ -12,3 +12,4 @@ node_modules/
 /.codex
 server.toml
 /docs/lobby/
+schematic.schem

@@ -62,6 +62,9 @@
   },
   "play": {
     "clientbound": {
+      "minecraft:add_entity": {
+        "protocol_id": 1
+      },
       "minecraft:keep_alive": {
         "protocol_id": 36
       },
@@ -104,6 +107,21 @@
       "minecraft:set_entity_data": {
         "protocol_id": 84
       },
+      "minecraft:move_entity_pos": {
+        "protocol_id": 44
+      },
+      "minecraft:move_entity_pos_rot": {
+        "protocol_id": 45
+      },
+      "minecraft:move_entity_rot": {
+        "protocol_id": 46
+      },
+      "minecraft:rotate_head": {
+        "protocol_id": 68
+      },
+      "minecraft:teleport_entity": {
+        "protocol_id": 107
+      },
       "minecraft:boss_event": {
         "protocol_id": 10
       },
@@ -121,6 +139,9 @@
       },
       "minecraft:player_abilities": {
         "protocol_id": 54
+      },
+      "minecraft:destroy_entities": {
+        "protocol_id": 64
       }
     },
     "serverbound": {

@@ -26,12 +26,21 @@ use minecraft_packets::play::client_bound_keep_alive_packet::ClientBoundKeepAliv
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
 use minecraft_packets::play::commands_packet::CommandsPacket;
+use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
 use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_packets::play::game_event_packet::GameEventPacket;
 use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket;
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
+use minecraft_packets::play::move_entity_packet::{
+    MoveEntityPosPacket, MoveEntityPosRotPacket, MoveEntityRotPacket,
+};
+use minecraft_packets::play::player_command_packet::PlayerCommandPacket;
+use minecraft_packets::play::player_info_remove_packet::PlayerInfoRemovePacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
+use minecraft_packets::play::player_input_packet::PlayerInputPacket;
+use minecraft_packets::play::remove_entities_packet::RemoveEntitiesPacket;
+use minecraft_packets::play::rotate_head_packet::RotateHeadPacket;
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
@@ -42,9 +51,14 @@ use minecraft_packets::play::set_player_position_packet::SetPlayerPositionPacket
 use minecraft_packets::play::set_subtitle_text_packet::SetSubtitleTextPacket;
 use minecraft_packets::play::set_title_text_packet::SetTitleTextPacket;
 use minecraft_packets::play::set_titles_animation::SetTitlesAnimationPacket;
+use minecraft_packets::play::spawn_entity_packet::SpawnEntityPacket;
+use minecraft_packets::play::spawn_player_packet::SpawnPlayerPacket;
 use minecraft_packets::play::synchronize_player_position_packet::SynchronizePlayerPositionPacket;
 use minecraft_packets::play::system_chat_message_packet::SystemChatMessagePacket;
 use minecraft_packets::play::tab_list_packet::TabListPacket;
+use minecraft_packets::play::teleport_entity_packet::{
+    EntityPositionSyncPacket, TeleportEntityPacket,
+};
 use minecraft_packets::play::transfer_packet::TransferPacket;
 use minecraft_packets::play::update_time_packet::UpdateTimePacket;
 use minecraft_packets::status::ping_request_packet::PingRequestPacket;
@@ -293,9 +307,74 @@ pub enum PacketRegistry {
     #[protocol_id(
         state = "play",
         bound = "clientbound",
+        name = "minecraft:player_info_remove"
+    )]
+    PlayerInfoRemove(PlayerInfoRemovePacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:remove_entities"
+    )]
+    RemoveEntities(RemoveEntitiesPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:destroy_entities"
+    )]
+    DestroyEntities(DestroyEntitiesPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:move_entity_pos"
+    )]
+    MoveEntityPos(MoveEntityPosPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:move_entity_pos_rot"
+    )]
+    MoveEntityPosRot(MoveEntityPosRotPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:move_entity_rot"
+    )]
+    MoveEntityRot(MoveEntityRotPacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:rotate_head")]
+    RotateHead(RotateHeadPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
         name = "minecraft:set_entity_data"
     )]
     SetEntityMetadata(SetEntityMetadataPacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:add_entity")]
+    SpawnEntity(SpawnEntityPacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:add_player")]
+    SpawnPlayer(SpawnPlayerPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:entity_position_sync"
+    )]
+    EntityPositionSync(EntityPositionSyncPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:teleport_entity"
+    )]
+    TeleportEntity(TeleportEntityPacket),
 
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:boss_event")]
     BossBar(BossBarPacket),
@@ -351,6 +430,16 @@ pub enum PacketRegistry {
         name = "minecraft:player_abilities"
     )]
     ServerBoundPlayerAbilities(ServerBoundPlayerAbilitiesPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:player_command"
+    )]
+    PlayerCommand(PlayerCommandPacket),
+
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:player_input")]
+    PlayerInput(PlayerInputPacket),
 }
 
 impl PacketHandler for PacketRegistry {
@@ -372,7 +461,368 @@ impl PacketHandler for PacketRegistry {
             Self::ChatCommand(packet) => packet.handle(client_state, server_state),
             Self::ChatMessage(packet) => packet.handle(client_state, server_state),
             Self::ServerBoundPlayerAbilities(packet) => packet.handle(client_state, server_state),
+            Self::PlayerCommand(packet) => packet.handle(client_state, server_state),
+            Self::PlayerInput(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minecraft_protocol::prelude::Uuid;
+
+    #[test]
+    fn decodes_current_player_command_packet() {
+        let raw_packet = RawPacket::from_bytes(37, &[0xac, 0x02, 0, 0]);
+        let packet =
+            PacketRegistry::decode_packet(ProtocolVersion::V1_21, State::Play, raw_packet).unwrap();
+
+        match packet {
+            PacketRegistry::PlayerCommand(packet) => {
+                assert_eq!(packet.entity_id(), 300);
+                assert_eq!(packet.crouching_change(), Some(true));
+            }
+            _ => panic!("expected player command packet"),
+        }
+    }
+
+    #[test]
+    fn decodes_older_player_command_packet_ids() {
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_7_2, 11),
+            (ProtocolVersion::V1_8, 11),
+            (ProtocolVersion::V1_12_2, 21),
+            (ProtocolVersion::V1_19_4, 30),
+            (ProtocolVersion::V1_20_5, 37),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, &[0xac, 0x02, 0, 0]);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::PlayerCommand(packet) => {
+                    assert_eq!(packet.entity_id(), 300);
+                    assert_eq!(packet.crouching_change(), Some(true));
+                }
+                _ => panic!("expected player command packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_latest_player_command_packet_id() {
+        let raw_packet = RawPacket::from_bytes(42, &[0xac, 0x02, 1, 0]);
+        let packet =
+            PacketRegistry::decode_packet(ProtocolVersion::V26_1, State::Play, raw_packet).unwrap();
+
+        match packet {
+            PacketRegistry::PlayerCommand(packet) => {
+                assert_eq!(packet.entity_id(), 300);
+                assert_eq!(packet.crouching_change(), Some(false));
+            }
+            _ => panic!("expected player command packet"),
+        }
+    }
+
+    #[test]
+    fn decodes_latest_player_input_packet_id() {
+        let raw_packet = RawPacket::from_bytes(43, &[0x20]);
+        let packet =
+            PacketRegistry::decode_packet(ProtocolVersion::V26_1, State::Play, raw_packet).unwrap();
+
+        match packet {
+            PacketRegistry::PlayerInput(packet) => {
+                assert_eq!(packet.shift(), Some(true));
+            }
+            _ => panic!("expected player input packet"),
+        }
+    }
+
+    #[test]
+    fn decodes_v1_21_9_player_input_packet_id() {
+        let raw_packet = RawPacket::from_bytes(42, &[0x20]);
+        let packet =
+            PacketRegistry::decode_packet(ProtocolVersion::V1_21_9, State::Play, raw_packet)
+                .unwrap();
+
+        match packet {
+            PacketRegistry::PlayerInput(packet) => {
+                assert_eq!(packet.shift(), Some(true));
+            }
+            _ => panic!("expected player input packet"),
+        }
+    }
+
+    #[test]
+    fn encodes_current_player_info_remove_packet() {
+        let uuid = Uuid::from_u128(1);
+        let packet = PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid));
+
+        let raw_packet = packet.encode_packet(ProtocolVersion::V1_21).unwrap();
+
+        assert_eq!(
+            raw_packet.bytes(),
+            &[61, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,]
+        );
+    }
+
+    #[test]
+    fn encodes_latest_player_info_remove_packet_id() {
+        let uuid = Uuid::from_u128(1);
+        let packet = PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid));
+
+        let raw_packet = packet.encode_packet(ProtocolVersion::V26_1).unwrap();
+
+        assert_eq!(raw_packet.packet_id(), Some(69));
+        assert_eq!(
+            raw_packet.data(),
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn encodes_current_remove_entities_packet() {
+        let packet = PacketRegistry::RemoveEntities(RemoveEntitiesPacket::single(300));
+
+        let raw_packet = packet.encode_packet(ProtocolVersion::V1_21).unwrap();
+
+        assert_eq!(raw_packet.bytes(), &[66, 1, 0xac, 0x02]);
+    }
+
+    #[test]
+    fn encodes_latest_remove_entities_packet_id() {
+        let packet = PacketRegistry::RemoveEntities(RemoveEntitiesPacket::single(300));
+
+        let raw_packet = packet.encode_packet(ProtocolVersion::V26_1).unwrap();
+
+        assert_eq!(raw_packet.packet_id(), Some(77));
+        assert_eq!(raw_packet.data(), &[1, 0xac, 0x02]);
+    }
+
+    #[test]
+    fn encodes_current_relative_move_packets() {
+        let delta = minecraft_packets::play::move_entity_packet::RelativeMoveDelta::new_unchecked(
+            2048, -1024, 512,
+        );
+
+        let raw_packet = PacketRegistry::MoveEntityPos(MoveEntityPosPacket::new(300, delta, true))
+            .encode_packet(ProtocolVersion::V1_21)
+            .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(46));
+        assert_eq!(
+            raw_packet.data(),
+            &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 1]
+        );
+
+        let raw_packet = PacketRegistry::MoveEntityPosRot(MoveEntityPosRotPacket::new(
+            300, delta, 90.0, 45.0, false,
+        ))
+        .encode_packet(ProtocolVersion::V1_21)
+        .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(47));
+        assert_eq!(
+            raw_packet.data(),
+            &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 0]
+        );
+
+        let raw_packet =
+            PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(300, 180.0, -90.0, true))
+                .encode_packet(ProtocolVersion::V1_21)
+                .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(48));
+        assert_eq!(raw_packet.data(), &[0xac, 0x02, 128, 192, 1]);
+    }
+
+    #[test]
+    fn encodes_latest_relative_move_packet_ids() {
+        let delta = minecraft_packets::play::move_entity_packet::RelativeMoveDelta::new_unchecked(
+            2048, -1024, 512,
+        );
+
+        assert_eq!(
+            PacketRegistry::MoveEntityPos(MoveEntityPosPacket::new(300, delta, true))
+                .encode_packet(ProtocolVersion::V26_1)
+                .unwrap()
+                .packet_id(),
+            Some(53)
+        );
+        assert_eq!(
+            PacketRegistry::MoveEntityPosRot(MoveEntityPosRotPacket::new(
+                300, delta, 90.0, 45.0, false,
+            ))
+            .encode_packet(ProtocolVersion::V26_1)
+            .unwrap()
+            .packet_id(),
+            Some(54)
+        );
+        assert_eq!(
+            PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(300, 180.0, -90.0, true))
+                .encode_packet(ProtocolVersion::V26_1)
+                .unwrap()
+                .packet_id(),
+            Some(56)
+        );
+    }
+
+    #[test]
+    fn encodes_mid_current_relative_move_packet_ids() {
+        let delta = minecraft_packets::play::move_entity_packet::RelativeMoveDelta::new_unchecked(
+            2048, -1024, 512,
+        );
+
+        for (protocol_version, pos_id, pos_rot_id, rot_id, head_id, teleport_id) in [
+            (ProtocolVersion::V1_19_4, 43, 44, 45, 66, 104),
+            (ProtocolVersion::V1_20, 43, 44, 45, 66, 104),
+            (ProtocolVersion::V1_20_2, 44, 45, 46, 68, 107),
+            (ProtocolVersion::V1_20_3, 44, 45, 46, 70, 109),
+            (ProtocolVersion::V1_20_5, 46, 47, 48, 72, 112),
+        ] {
+            assert_eq!(
+                PacketRegistry::MoveEntityPos(MoveEntityPosPacket::new(300, delta, true))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(pos_id)
+            );
+            assert_eq!(
+                PacketRegistry::MoveEntityPosRot(MoveEntityPosRotPacket::new(
+                    300, delta, 90.0, 45.0, false,
+                ))
+                .encode_packet(protocol_version)
+                .unwrap()
+                .packet_id(),
+                Some(pos_rot_id)
+            );
+            assert_eq!(
+                PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(300, 180.0, -90.0, true))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(rot_id)
+            );
+            assert_eq!(
+                PacketRegistry::RotateHead(RotateHeadPacket::new(300, 90.0))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(head_id)
+            );
+            assert_eq!(
+                PacketRegistry::TeleportEntity(TeleportEntityPacket::absolute(
+                    300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+                ))
+                .encode_packet(protocol_version)
+                .unwrap()
+                .packet_id(),
+                Some(teleport_id)
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_old_and_mid_relative_move_packet_ids() {
+        let delta = minecraft_packets::play::move_entity_packet::RelativeMoveDelta::new_unchecked(
+            2048, -1024, 512,
+        );
+
+        for (protocol_version, pos_id, pos_rot_id, rot_id, head_id, teleport_id) in [
+            (ProtocolVersion::V1_7_2, 21, 23, 22, 25, 24),
+            (ProtocolVersion::V1_8, 21, 23, 22, 25, 24),
+            (ProtocolVersion::V1_12_2, 38, 39, 40, 54, 76),
+            (ProtocolVersion::V1_18_2, 41, 42, 43, 62, 98),
+            (ProtocolVersion::V1_19_3, 39, 40, 41, 62, 100),
+        ] {
+            assert_eq!(
+                PacketRegistry::MoveEntityPos(MoveEntityPosPacket::new(300, delta, true))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(pos_id)
+            );
+            assert_eq!(
+                PacketRegistry::MoveEntityPosRot(MoveEntityPosRotPacket::new(
+                    300, delta, 90.0, 45.0, false,
+                ))
+                .encode_packet(protocol_version)
+                .unwrap()
+                .packet_id(),
+                Some(pos_rot_id)
+            );
+            assert_eq!(
+                PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(300, 180.0, -90.0, true))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(rot_id)
+            );
+            assert_eq!(
+                PacketRegistry::RotateHead(RotateHeadPacket::new(300, 90.0))
+                    .encode_packet(protocol_version)
+                    .unwrap()
+                    .packet_id(),
+                Some(head_id)
+            );
+            assert_eq!(
+                PacketRegistry::TeleportEntity(TeleportEntityPacket::absolute(
+                    300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+                ))
+                .encode_packet(protocol_version)
+                .unwrap()
+                .packet_id(),
+                Some(teleport_id)
+            );
+        }
+    }
+
+    #[test]
+    fn encodes_current_and_latest_head_rotation_packets() {
+        let raw_packet = PacketRegistry::RotateHead(RotateHeadPacket::new(300, 90.0))
+            .encode_packet(ProtocolVersion::V1_21)
+            .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(72));
+        assert_eq!(raw_packet.data(), &[0xac, 0x02, 64]);
+
+        let raw_packet = PacketRegistry::RotateHead(RotateHeadPacket::new(300, 90.0))
+            .encode_packet(ProtocolVersion::V26_1)
+            .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(83));
+        assert_eq!(raw_packet.data(), &[0xac, 0x02, 64]);
+    }
+
+    #[test]
+    fn encodes_current_legacy_entity_teleport_packet() {
+        let raw_packet = PacketRegistry::TeleportEntity(TeleportEntityPacket::absolute(
+            300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+        ))
+        .encode_packet(ProtocolVersion::V1_21)
+        .unwrap();
+
+        assert_eq!(raw_packet.packet_id(), Some(112));
+        assert_eq!(raw_packet.data().len(), 29);
+        assert_eq!(&raw_packet.data()[0..2], &[0xac, 0x02]);
+        assert_eq!(&raw_packet.data()[26..29], &[64, 32, 1]);
+    }
+
+    #[test]
+    fn encodes_position_sync_packet_after_v1_21_2() {
+        let raw_packet = PacketRegistry::EntityPositionSync(EntityPositionSyncPacket::absolute(
+            300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+        ))
+        .encode_packet(ProtocolVersion::V1_21_2)
+        .unwrap();
+
+        assert_eq!(raw_packet.packet_id(), Some(32));
+        assert_eq!(raw_packet.data().len(), 63);
+        assert_eq!(&raw_packet.data()[0..2], &[0xac, 0x02]);
+        assert_eq!(&raw_packet.data()[58..63], &[0, 0, 0, 0, 1]);
+
+        let raw_packet = PacketRegistry::EntityPositionSync(EntityPositionSyncPacket::absolute(
+            300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+        ))
+        .encode_packet(ProtocolVersion::V26_1)
+        .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(35));
+        assert_eq!(raw_packet.data().len(), 63);
     }
 }

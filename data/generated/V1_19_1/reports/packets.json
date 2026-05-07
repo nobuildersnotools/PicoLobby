@@ -1,135 +1,156 @@
 {
-  "handshake": {
-    "serverbound": {
-      "minecraft:intention": {
-        "protocol_id": 0
-      }
-    }
-  },
-  "login": {
-    "clientbound": {
-      "minecraft:custom_query": {
-        "protocol_id": 4
-      },
-      "minecraft:game_profile": {
-        "protocol_id": 2
-      },
-      "minecraft:login_disconnect": {
-        "protocol_id": 0
-      },
-      "minecraft:login_compression": {
-        "protocol_id": 3
-      }
+    "handshake": {
+        "serverbound": {
+            "minecraft:intention": {
+                "protocol_id": 0
+            }
+        }
     },
-    "serverbound": {
-      "minecraft:custom_query_answer": {
-        "protocol_id": 2
-      },
-      "minecraft:hello": {
-        "protocol_id": 0
-      },
-      "minecraft:login_acknowledged": {
-        "protocol_id": 3
-      }
-    }
-  },
-  "play": {
-    "clientbound": {
-      "minecraft:keep_alive": {
-        "protocol_id": 32
-      },
-      "minecraft:level_chunk_with_light": {
-        "protocol_id": 33
-      },
-      "minecraft:login": {
-        "protocol_id": 37
-      },
-      "minecraft:player_position": {
-        "protocol_id": 57
-      },
-      "minecraft:set_default_spawn_position": {
-        "protocol_id": 77
-      },
-      "minecraft:custom_payload": {
-        "protocol_id": 22
-      },
-      "minecraft:system_chat": {
-        "protocol_id": 98
-      },
-      "minecraft:commands": {
-        "protocol_id": 15
-      },
-      "minecraft:disconnect": {
-        "protocol_id": 25
-      },
-      "minecraft:set_chunk_cache_center": {
-        "protocol_id": 75
-      },
-      "minecraft:set_time": {
-        "protocol_id": 92
-      },
-      "minecraft:tab_list": {
-        "protocol_id": 99
-      },
-      "minecraft:player_info_update": {
-        "protocol_id": 55
-      },
-      "minecraft:set_entity_data": {
-        "protocol_id": 80
-      },
-      "minecraft:boss_event": {
-        "protocol_id": 10
-      },
-      "minecraft:set_subtitle_text": {
-        "protocol_id": 91
-      },
-      "minecraft:set_title_text": {
-        "protocol_id": 93
-      },
-      "minecraft:set_titles_animation": {
-        "protocol_id": 94
-      },
-      "minecraft:set_action_bar_text": {
-        "protocol_id": 67
-      },
-      "minecraft:player_abilities": {
-        "protocol_id": 49
-      }
+    "login": {
+        "clientbound": {
+            "minecraft:custom_query": {
+                "protocol_id": 4
+            },
+            "minecraft:game_profile": {
+                "protocol_id": 2
+            },
+            "minecraft:login_disconnect": {
+                "protocol_id": 0
+            },
+            "minecraft:login_compression": {
+                "protocol_id": 3
+            }
+        },
+        "serverbound": {
+            "minecraft:custom_query_answer": {
+                "protocol_id": 2
+            },
+            "minecraft:hello": {
+                "protocol_id": 0
+            },
+            "minecraft:login_acknowledged": {
+                "protocol_id": 3
+            }
+        }
     },
-    "serverbound": {
-      "minecraft:move_player_pos_rot": {
-        "protocol_id": 21
-      },
-      "minecraft:move_player_pos": {
-        "protocol_id": 20
-      },
-      "minecraft:chat": {
-        "protocol_id": 5
-      },
-      "minecraft:chat_command": {
-        "protocol_id": 4
-      },
-      "minecraft:player_abilities": {
-        "protocol_id": 28
-      }
-    }
-  },
-  "status": {
-    "clientbound": {
-      "minecraft:pong_response": {
-        "protocol_id": 1
-      },
-      "minecraft:status_response": {
-        "protocol_id": 0
-      }
+    "play": {
+        "clientbound": {
+            "minecraft:add_player": {
+                "protocol_id": 2
+            },
+            "minecraft:boss_event": {
+                "protocol_id": 10
+            },
+            "minecraft:commands": {
+                "protocol_id": 15
+            },
+            "minecraft:custom_payload": {
+                "protocol_id": 22
+            },
+            "minecraft:destroy_entities": {
+                "protocol_id": 58
+            },
+            "minecraft:disconnect": {
+                "protocol_id": 25
+            },
+            "minecraft:keep_alive": {
+                "protocol_id": 32
+            },
+            "minecraft:level_chunk_with_light": {
+                "protocol_id": 33
+            },
+            "minecraft:login": {
+                "protocol_id": 37
+            },
+            "minecraft:move_entity_pos": {
+                "protocol_id": 40
+            },
+            "minecraft:move_entity_pos_rot": {
+                "protocol_id": 41
+            },
+            "minecraft:move_entity_rot": {
+                "protocol_id": 42
+            },
+            "minecraft:player_abilities": {
+                "protocol_id": 49
+            },
+            "minecraft:player_info_update": {
+                "protocol_id": 55
+            },
+            "minecraft:player_position": {
+                "protocol_id": 57
+            },
+            "minecraft:rotate_head": {
+                "protocol_id": 63
+            },
+            "minecraft:set_action_bar_text": {
+                "protocol_id": 67
+            },
+            "minecraft:set_chunk_cache_center": {
+                "protocol_id": 75
+            },
+            "minecraft:set_default_spawn_position": {
+                "protocol_id": 77
+            },
+            "minecraft:set_entity_data": {
+                "protocol_id": 80
+            },
+            "minecraft:set_subtitle_text": {
+                "protocol_id": 91
+            },
+            "minecraft:set_time": {
+                "protocol_id": 92
+            },
+            "minecraft:set_title_text": {
+                "protocol_id": 93
+            },
+            "minecraft:set_titles_animation": {
+                "protocol_id": 94
+            },
+            "minecraft:system_chat": {
+                "protocol_id": 98
+            },
+            "minecraft:tab_list": {
+                "protocol_id": 99
+            },
+            "minecraft:teleport_entity": {
+                "protocol_id": 102
+            }
+        },
+        "serverbound": {
+            "minecraft:move_player_pos_rot": {
+                "protocol_id": 21
+            },
+            "minecraft:move_player_pos": {
+                "protocol_id": 20
+            },
+            "minecraft:chat": {
+                "protocol_id": 5
+            },
+            "minecraft:chat_command": {
+                "protocol_id": 4
+            },
+            "minecraft:player_abilities": {
+                "protocol_id": 28
+            }
+        }
     },
-    "serverbound": {
-      "minecraft:ping_request": {
-        "protocol_id": 1
-      },
-      "minecraft:status_request": {
-        "protocol_id": 0
-      }
+    "status": {
+        "clientbound": {
+            "minecraft:pong_response": {
+                "protocol_id": 1
+            },
+            "minecraft:status_response": {
+                "protocol_id": 0
+            }
+        },
+        "serverbound": {
+            "minecraft:ping_request": {
+                "protocol_id": 1
+            },
+            "minecraft:status_request": {
+                "protocol_id": 0
+            }
+        }
     }
-  }
 }

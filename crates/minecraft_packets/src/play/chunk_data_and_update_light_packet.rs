@@ -1,11 +1,8 @@
 use crate::play::data::chunk_context::{VoidChunkContext, WorldContext};
 use crate::play::data::chunk_data::ChunkData;
-use crate::play::data::light_data::LightData;
+use crate::play::data::light_data::{LightData, LightDataLegacy};
 use minecraft_protocol::prelude::*;
 
-/// This packet is only mandatory for versions above 1.20.3,
-/// thus the packet is only implemented to work on versions after 1.20.3.
-/// The GameEventPacket must be sent before sending this one.
 #[derive(PacketOut)]
 pub struct ChunkDataAndUpdateLightPacket {
     chunk_x: i32,
@@ -14,27 +11,30 @@ pub struct ChunkDataAndUpdateLightPacket {
     #[pvn(..755)]
     full_chunk: bool,
 
-    /// If false, the client will recalculate lighting based on the old/new chunk data
-    #[pvn(..751)]
+    /// Added in V1_16 alongside the combined chunk+light packet; not present in pre-1.16 formats.
+    #[pvn(735..751)]
     ignore_old_data: bool,
 
-    /// BitSet with bits (world height in blocks / 16) set to 1 for every 16×16×16 chunk section whose data is included in Data. The least significant bit represents the chunk section at the bottom of the chunk column (from the lowest y to 15 blocks above).
-    /// Up until 1.17.1 included
+    /// BitSet primary bit mask (V1_17 only: 755–756).
     #[pvn(755..757)]
-    v1_17_primary_bit_mask: LengthPaddedVec<u64>, // availableSections bitset?
+    v1_17_primary_bit_mask: LengthPaddedVec<u64>,
 
+    /// VarInt primary bit mask (pre-V1_17).
     #[pvn(..755)]
     primary_bit_mask: VarInt,
 
     chunk_data: ChunkData,
 
-    /// If edges should be trusted for light updates.
-    /// Up until 1.19.4 included
-    #[pvn(757..763)]
+    /// Present from V1_16 (when light was folded into this packet) through V1_19.4.
+    #[pvn(735..763)]
     trust_edges: bool,
 
-    // TODO: Implement Update Light packet for versions prior to 1.18
-    #[pvn(757..)]
+    /// V1_16–V1_16_4 (735–754): light masks are a single VarInt.
+    #[pvn(735..755)]
+    v1_16_light_data: LightDataLegacy,
+
+    /// V1_17+ (755+): light masks are BitSet (array of i64).
+    #[pvn(755..)]
     v1_18_light_data: LightData,
 }
 
@@ -50,6 +50,7 @@ impl ChunkDataAndUpdateLightPacket {
             ignore_old_data: false,
             chunk_data: ChunkData::void(context),
             trust_edges: true,
+            v1_16_light_data: LightDataLegacy::new_void(),
             v1_18_light_data: LightData::new_void(dimension_height),
         }
     }
@@ -63,7 +64,7 @@ impl ChunkDataAndUpdateLightPacket {
         let chunk_x = chunk_context.chunk_x;
         let chunk_z = chunk_context.chunk_z;
 
-        let light_data = match (
+        let (v1_18_light_data, v1_16_light_data) = match (
             schematic_context
                 .world
                 .get_chunk_sky_light(chunk_x, chunk_z),
@@ -71,10 +72,14 @@ impl ChunkDataAndUpdateLightPacket {
                 .world
                 .get_chunk_block_light(chunk_x, chunk_z),
         ) {
-            (Some(sky_light), Some(block_light)) => {
-                LightData::from_light_data(sky_light, block_light, chunk_context.dimension_height)
-            }
-            _ => LightData::new_void(chunk_context.dimension_height),
+            (Some(sky_light), Some(block_light)) => (
+                LightData::from_light_data(sky_light, block_light, chunk_context.dimension_height),
+                LightDataLegacy::from_light_data(sky_light, block_light),
+            ),
+            _ => (
+                LightData::new_void(chunk_context.dimension_height),
+                LightDataLegacy::new_void(),
+            ),
         };
 
         Self {
@@ -90,7 +95,8 @@ impl ChunkDataAndUpdateLightPacket {
                 protocol_version,
             ),
             trust_edges: true,
-            v1_18_light_data: light_data,
+            v1_16_light_data,
+            v1_18_light_data,
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::server::game_profile::GameProfile;
-use crate::server_state::LobbySessionId;
+use crate::server_state::{LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId};
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
 use tracing::info;
@@ -22,6 +22,8 @@ impl Default for ClientState {
             keep_alive_enabled: KeepAliveStatus::Disabled,
             entity_id: 0,
             lobby_session_id: None,
+            pending_lobby_metadata_plan: None,
+            pending_lobby_movement_plan: None,
             position: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0),
             is_flight_allowed: false,
@@ -40,6 +42,8 @@ pub struct ClientState {
     keep_alive_enabled: KeepAliveStatus,
     entity_id: i32,
     lobby_session_id: Option<LobbySessionId>,
+    pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
+    pending_lobby_movement_plan: Option<LobbyMovementPlan>,
     position: (f64, f64, f64),
     rotation: (f32, f32),
     is_flight_allowed: bool,
@@ -151,6 +155,22 @@ impl ClientState {
 
     pub const fn clear_lobby_session_id(&mut self) {
         self.lobby_session_id = None;
+    }
+
+    pub fn set_pending_metadata_plan(&mut self, plan: LobbyMetadataPlan) {
+        self.pending_lobby_metadata_plan = Some(plan);
+    }
+
+    pub const fn take_pending_metadata_plan(&mut self) -> Option<LobbyMetadataPlan> {
+        self.pending_lobby_metadata_plan.take()
+    }
+
+    pub fn set_pending_movement_plan(&mut self, plan: LobbyMovementPlan) {
+        self.pending_lobby_movement_plan = Some(plan);
+    }
+
+    pub const fn take_pending_movement_plan(&mut self) -> Option<LobbyMovementPlan> {
+        self.pending_lobby_movement_plan.take()
     }
 
     // Keep alive

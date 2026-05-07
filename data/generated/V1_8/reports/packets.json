@@ -35,20 +35,50 @@
   },
   "play": {
     "clientbound": {
+      "minecraft:add_player": {
+        "protocol_id": 12
+      },
+      "minecraft:destroy_entities": {
+        "protocol_id": 19
+      },
+      "minecraft:disconnect": {
+        "protocol_id": 64
+      },
       "minecraft:keep_alive": {
         "protocol_id": 0
-      },
-      "minecraft:login": {
-        "protocol_id": 1
-      },
-      "minecraft:player_position": {
-        "protocol_id": 8
       },
       "minecraft:legacy_chat_message": {
         "protocol_id": 2
       },
-      "minecraft:disconnect": {
-        "protocol_id": 64
+      "minecraft:legacy_set_title": {
+        "protocol_id": 69
+      },
+      "minecraft:login": {
+        "protocol_id": 1
+      },
+      "minecraft:move_entity_pos": {
+        "protocol_id": 21
+      },
+      "minecraft:move_entity_pos_rot": {
+        "protocol_id": 23
+      },
+      "minecraft:move_entity_rot": {
+        "protocol_id": 22
+      },
+      "minecraft:player_abilities": {
+        "protocol_id": 57
+      },
+      "minecraft:player_info_update": {
+        "protocol_id": 56
+      },
+      "minecraft:player_position": {
+        "protocol_id": 8
+      },
+      "minecraft:rotate_head": {
+        "protocol_id": 25
+      },
+      "minecraft:set_entity_data": {
+        "protocol_id": 28
       },
       "minecraft:set_time": {
         "protocol_id": 3
@@ -56,17 +86,8 @@
       "minecraft:tab_list": {
         "protocol_id": 71
       },
-      "minecraft:set_entity_data": {
-        "protocol_id": 28
-      },
-      "minecraft:player_info_update": {
-        "protocol_id": 56
-      },
-      "minecraft:legacy_set_title": {
-        "protocol_id": 69
-      },
-      "minecraft:player_abilities": {
-        "protocol_id": 57
+      "minecraft:teleport_entity": {
+        "protocol_id": 24
       }
     },
     "serverbound": {
@@ -81,6 +102,9 @@
       },
       "minecraft:player_abilities": {
         "protocol_id": 19
+      },
+      "minecraft:player_command": {
+        "protocol_id": 11
       }
     }
   },

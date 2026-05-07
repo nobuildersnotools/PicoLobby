@@ -56,11 +56,32 @@
       "minecraft:set_entity_data": {
         "protocol_id": 28
       },
+      "minecraft:move_entity_pos": {
+        "protocol_id": 21
+      },
+      "minecraft:move_entity_pos_rot": {
+        "protocol_id": 23
+      },
+      "minecraft:move_entity_rot": {
+        "protocol_id": 22
+      },
+      "minecraft:rotate_head": {
+        "protocol_id": 25
+      },
+      "minecraft:teleport_entity": {
+        "protocol_id": 24
+      },
       "minecraft:player_info_update": {
         "protocol_id": 56
       },
       "minecraft:player_abilities": {
         "protocol_id": 57
+      },
+      "minecraft:destroy_entities": {
+        "protocol_id": 19
+      },
+      "minecraft:add_player": {
+        "protocol_id": 12
       }
     },
     "serverbound": {
@@ -75,6 +96,9 @@
       },
       "minecraft:player_abilities": {
         "protocol_id": 19
+      },
+      "minecraft:player_command": {
+        "protocol_id": 11
       }
     }
   },

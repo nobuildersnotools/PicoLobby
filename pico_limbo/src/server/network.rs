@@ -1,22 +1,28 @@
 use crate::server::client_data::ClientData;
+use crate::server::lobby_visibility::{
+    join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
+    leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
+};
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
     PacketRegistry, PacketRegistryDecodeError, PacketRegistryEncodeError,
 };
 use crate::server::shutdown_signal::shutdown_signal;
-use crate::server_state::ServerState;
+use crate::server_state::{LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId, ServerState};
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
 use minecraft_packets::play::client_bound_keep_alive_packet::ClientBoundKeepAlivePacket;
 use minecraft_packets::play::disconnect_packet::DisconnectPacket;
-use minecraft_protocol::prelude::State;
+use minecraft_protocol::prelude::{ProtocolVersion, State};
 use net::packet_stream::PacketStreamError;
 use net::raw_packet::RawPacket;
+use std::collections::HashMap;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, trace, warn};
 
 pub struct Server {
@@ -142,6 +148,7 @@ async fn process_packet(
     server_state: &Arc<RwLock<ServerState>>,
     raw_packet: RawPacket,
     was_in_play_state: &mut bool,
+    broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
 ) -> Result<(), PacketProcessingError> {
     let mut client_state = client_data.client().await;
     let protocol_version = client_state.protocol_version();
@@ -156,11 +163,19 @@ async fn process_packet(
     let protocol_version = client_state.protocol_version();
     let state = client_state.state();
 
-    if !*was_in_play_state && state == State::Play {
+    let first_play_packet = !*was_in_play_state && state == State::Play;
+    let mut join_session_id: Option<LobbySessionId> = None;
+
+    if first_play_packet {
         *was_in_play_state = true;
         {
             let server_state_guard = server_state.read().await;
-            if !server_state_guard.lobby_enabled() {
+            if server_state_guard.lobby_enabled() {
+                if let Some(session_id) = client_state.lobby_session_id() {
+                    server_state_guard.set_lobby_broadcast_sender(session_id, broadcast_tx.clone());
+                    join_session_id = Some(session_id);
+                }
+            } else {
                 server_state_guard.increment();
             }
         }
@@ -189,6 +204,9 @@ async fn process_packet(
         }
     }
 
+    let pending_metadata_plan = client_state.take_pending_metadata_plan();
+    let pending_movement_plan = client_state.take_pending_movement_plan();
+
     if let Some(reason) = client_state.should_kick() {
         drop(client_state);
         kick_client(client_data, reason.clone())
@@ -198,34 +216,164 @@ async fn process_packet(
     }
 
     drop(client_state);
+
+    if let Some(plan) = pending_metadata_plan {
+        broadcast_metadata(&plan, server_state).await;
+    }
+
+    if let Some(plan) = pending_movement_plan {
+        broadcast_movement(&plan, server_state).await;
+    }
+
+    if let Some(session_id) = join_session_id {
+        send_join_visibility(client_data, server_state, session_id, protocol_version).await?;
+    }
+
     client_data.enable_keep_alive_if_needed().await;
 
     Ok(())
+}
+
+async fn send_join_visibility(
+    client_data: &ClientData,
+    server_state: &Arc<RwLock<ServerState>>,
+    session_id: LobbySessionId,
+    newcomer_version: ProtocolVersion,
+) -> Result<(), PacketProcessingError> {
+    let server_state_guard = server_state.read().await;
+    let Some(join_plan) = server_state_guard.plan_lobby_join(session_id) else {
+        return Ok(());
+    };
+    let senders: HashMap<_, _> = server_state_guard
+        .collect_lobby_broadcast_senders(&join_plan.existing_recipients)
+        .into_iter()
+        .collect();
+    drop(server_state_guard);
+
+    let newcomer_packets = join_visibility_packets_for_newcomer(&join_plan, newcomer_version);
+    let newcomer_packet_count = newcomer_packets.len();
+    for packet in newcomer_packets {
+        if let Ok(raw_packet) = packet.encode_packet(newcomer_version) {
+            client_data.write_packet(raw_packet).await?;
+        }
+    }
+
+    let broadcast_batches = join_visibility_batches_for_existing(&join_plan);
+    let mut broadcast_count = 0usize;
+    for batch in broadcast_batches {
+        let version = batch.recipient.protocol_version;
+        let sid = batch.recipient.session_id;
+        if let Some(sender) = senders.get(&sid) {
+            for packet in batch.packets {
+                if let Ok(raw_packet) = packet.encode_packet(version) {
+                    let _ = sender.send(raw_packet);
+                    broadcast_count += 1;
+                }
+            }
+        }
+    }
+
+    debug!(
+        "Join visibility: sent {} packets to newcomer ({} existing players), broadcast {} packets to {} existing clients for entity id {}",
+        newcomer_packet_count,
+        join_plan.existing_sessions.len(),
+        broadcast_count,
+        join_plan.existing_recipients.len(),
+        join_plan.new_session.entity_id.get(),
+    );
+
+    Ok(())
+}
+
+async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<ServerState>>) {
+    let batches = movement_visibility_batches(plan);
+    if batches.is_empty() {
+        return;
+    }
+
+    let server_state_guard = server_state.read().await;
+    let senders: HashMap<_, _> = server_state_guard
+        .collect_lobby_broadcast_senders(&plan.recipients)
+        .into_iter()
+        .collect();
+    drop(server_state_guard);
+
+    for batch in batches {
+        let session_id = batch.recipient.session_id;
+        let version = batch.recipient.protocol_version;
+        if let Some(sender) = senders.get(&session_id) {
+            for packet in batch.packets {
+                if let Ok(raw_packet) = packet.encode_packet(version) {
+                    let _ = sender.send(raw_packet);
+                }
+            }
+        }
+    }
+}
+
+async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<ServerState>>) {
+    let batches = metadata_visibility_batches(plan);
+    if batches.is_empty() {
+        return;
+    }
+
+    let server_state_guard = server_state.read().await;
+    let senders: HashMap<_, _> = server_state_guard
+        .collect_lobby_broadcast_senders(&plan.recipients)
+        .into_iter()
+        .collect();
+    drop(server_state_guard);
+
+    for batch in batches {
+        let session_id = batch.recipient.session_id;
+        let version = batch.recipient.protocol_version;
+        if let Some(sender) = senders.get(&session_id) {
+            for packet in batch.packets {
+                if let Ok(raw_packet) = packet.encode_packet(version) {
+                    let _ = sender.send(raw_packet);
+                }
+            }
+        }
+    }
 }
 
 async fn read(
     client_data: &ClientData,
     server_state: &Arc<RwLock<ServerState>>,
     was_in_play_state: &mut bool,
+    broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
+    broadcast_rx: &mut mpsc::UnboundedReceiver<RawPacket>,
 ) -> Result<(), PacketProcessingError> {
     tokio::select! {
         result = client_data.read_packet() => {
             let raw_packet = result?;
-            process_packet(client_data, server_state, raw_packet, was_in_play_state).await?;
+            process_packet(client_data, server_state, raw_packet, was_in_play_state, broadcast_tx).await?;
         }
         () = client_data.keep_alive_tick() => {
             send_keep_alive(client_data).await?;
+        }
+        Some(raw_packet) = broadcast_rx.recv() => {
+            client_data.write_packet(raw_packet).await?;
         }
     }
     Ok(())
 }
 
 async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>) {
+    let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel::<RawPacket>();
     let client_data = ClientData::new(socket);
     let mut was_in_play_state = false;
 
     loop {
-        match read(&client_data, &server_state, &mut was_in_play_state).await {
+        match read(
+            &client_data,
+            &server_state,
+            &mut was_in_play_state,
+            &broadcast_tx,
+            &mut broadcast_rx,
+        )
+        .await
+        {
             Ok(()) => {}
             Err(PacketProcessingError::Disconnected) => {
                 debug!("Client disconnected");
@@ -253,7 +401,36 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
         {
             let server_state_guard = server_state.read().await;
             if server_state_guard.lobby_enabled() {
-                server_state_guard.unregister_lobby_session(lobby_session_id);
+                if let Some(plan) =
+                    server_state_guard.unregister_lobby_session_with_leave_plan(lobby_session_id)
+                {
+                    let batches = leave_visibility_batches(&plan);
+                    let senders: HashMap<_, _> = server_state_guard
+                        .collect_lobby_broadcast_senders(&plan.recipients)
+                        .into_iter()
+                        .collect();
+
+                    let batch_count = batches.len();
+                    let mut sent = 0usize;
+                    for batch in batches {
+                        let session_id = batch.recipient.session_id;
+                        let version = batch.recipient.protocol_version;
+                        if let Some(sender) = senders.get(&session_id) {
+                            for packet in batch.packets {
+                                if let Ok(raw_packet) = packet.encode_packet(version) {
+                                    let _ = sender.send(raw_packet);
+                                    sent += 1;
+                                }
+                            }
+                        }
+                    }
+                    debug!(
+                        "Sent {} lobby leave visibility packets across {} recipients for entity id {}",
+                        sent,
+                        batch_count,
+                        plan.departed_entity_id.get()
+                    );
+                }
             } else {
                 server_state_guard.decrement();
             }
