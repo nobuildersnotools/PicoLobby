@@ -9,10 +9,10 @@ pub struct RegistryEntry {
 }
 
 impl RegistryEntry {
-    pub fn new(entry_id: Identifier, nbt_bytes: Cow<'static, [u8]>) -> Self {
+    pub fn new(entry_id: Identifier, nbt_bytes: Option<Cow<'static, [u8]>>) -> Self {
         Self {
             entry_id,
-            nbt_bytes: Optional::Some(nbt_bytes),
+            nbt_bytes: nbt_bytes.map_or(Optional::None, Optional::Some),
         }
     }
 }

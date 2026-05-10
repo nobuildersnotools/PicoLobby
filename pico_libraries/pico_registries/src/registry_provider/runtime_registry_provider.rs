@@ -52,7 +52,9 @@ impl RegistryProvider for RuntimeRegistryProvider {
         let entry = get_dimension(&self.registry_manager, dimension)?;
         Ok(encode_nameless_compound_to_bytes(
             self.protocol_version,
-            &entry.get_raw_value(),
+            entry
+                .get_raw_value()
+                .ok_or(crate::Error::UnknownRegistryEntry)?,
         )?)
     }
 

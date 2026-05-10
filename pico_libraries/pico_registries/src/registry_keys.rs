@@ -31,9 +31,9 @@ pub enum RegistryKeys {
     DimensionType,
     #[registry(id = "minecraft:frog_variant", min_version = V1_21_5, is_mandatory = true)]
     FrogVariant,
-    #[registry(id = "minecraft:instrument", min_version = V26_1, is_mandatory = true)]
+    #[registry(id = "minecraft:instrument", min_version = V1_21_2, is_mandatory = true)]
     Instrument,
-    #[registry(id = "minecraft:jukebox_song", min_version = V26_1, is_mandatory = true)]
+    #[registry(id = "minecraft:jukebox_song", min_version = V1_21, is_mandatory = true)]
     JukeboxSong,
     #[registry(id = "minecraft:painting_variant", min_version = V1_21, is_mandatory = true)]
     PaintingVariant,
@@ -43,7 +43,7 @@ pub enum RegistryKeys {
     PigVariant,
     #[registry(id = "minecraft:timeline", min_version = V1_21_11, is_mandatory = true)]
     Timeline,
-    #[registry(id = "minecraft:trim_material", min_version = V26_1, is_mandatory = true)]
+    #[registry(id = "minecraft:trim_material", min_version = V1_19_4, is_mandatory = true)]
     TrimMaterial,
     #[registry(id = "minecraft:wolf_sound_variant", min_version = V1_21_5, is_mandatory = true)]
     WolfSoundVariant,

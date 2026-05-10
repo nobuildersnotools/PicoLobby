@@ -93,7 +93,7 @@ impl RegistryProvider for PrecomputedRegistries {
                     .iter()
                     .map(|e| RegistryDataEntry {
                         entry_id: Identifier::vanilla_unchecked(e.entry_id),
-                        nbt_bytes: Cow::Borrowed(e.nbt_bytes),
+                        nbt_bytes: e.nbt_bytes.map(Cow::Borrowed),
                     })
                     .collect();
                 (ident, entries_vec)

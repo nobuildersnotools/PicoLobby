@@ -3,6 +3,7 @@ use crate::data::registry_entry_value::RegistryEntryValue;
 use crate::data::registry_key::RegistryKey;
 use crate::data::tag::Tag;
 use crate::registry_keys::RegistryKeys;
+use crate::reports::registries_report::RegistriesReport;
 use pico_identifier::Identifier;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -79,7 +80,13 @@ impl Registry {
         let id = registry_keys.id();
         let sub_path = format!("{}/{}", id.namespace, id.thing);
         let path = resource_path.join(sub_path);
-        let read_dir = std::fs::read_dir(path)?;
+        let read_dir = match std::fs::read_dir(&path) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Self::load_report_entries(registry_keys, resource_path);
+            }
+            Err(err) => return Err(err.into()),
+        };
 
         let mut entries: Vec<_> = read_dir.collect::<Result<Vec<_>, _>>()?;
 
@@ -108,11 +115,45 @@ impl Registry {
 
                 let nbt_value = pico_nbt::json_to_nbt(json_data)?;
 
-                let entry = RegistryEntry::new(value, nbt_value, registry_key, protocol_id);
+                let entry = RegistryEntry::new(value, Some(nbt_value), registry_key, protocol_id);
                 protocol_id += 1;
                 Ok((registry_key_value, entry))
             })
             .collect()
+    }
+
+    fn load_report_entries(
+        registry_keys: &RegistryKeys,
+        resource_path: &Path,
+    ) -> crate::Result<HashMap<Identifier, RegistryEntry>> {
+        let Some(resource_root) = resource_path.parent() else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "registry resource root has no parent",
+            )
+            .into());
+        };
+        let registry_id = registry_keys.id();
+        let report = RegistriesReport::from_resource_path(resource_root)?;
+        let report_registry = report
+            .registries
+            .get(&registry_id)
+            .ok_or(crate::Error::UnknownRegistry)?;
+
+        Ok(report_registry
+            .entries
+            .iter()
+            .map(|(identifier, report_entry)| {
+                let registry_key = RegistryKey::new(registry_id.clone(), identifier.clone());
+                let entry = RegistryEntry::new(
+                    RegistryEntryValue::Other,
+                    None,
+                    registry_key,
+                    report_entry.protocol_id,
+                );
+                (identifier.clone(), entry)
+            })
+            .collect())
     }
 
     fn load_tags(

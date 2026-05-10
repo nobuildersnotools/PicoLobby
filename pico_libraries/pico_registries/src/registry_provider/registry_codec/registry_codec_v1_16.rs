@@ -33,11 +33,16 @@ pub fn get_registry_codec_bytes_v1_16(
         dimension: registry
             .get_entries()
             .iter()
-            .map(|entry| RegistryCodecEntry {
-                name: entry.get_registry_key().get_value().to_string(),
-                element: entry.get_raw_value().clone(),
+            .map(|entry| -> crate::Result<RegistryCodecEntry> {
+                Ok(RegistryCodecEntry {
+                    name: entry.get_registry_key().get_value().to_string(),
+                    element: entry
+                        .get_raw_value()
+                        .cloned()
+                        .ok_or(crate::Error::UnknownRegistryEntry)?,
+                })
             })
-            .collect(),
+            .collect::<crate::Result<_>>()?,
     };
 
     Ok(encode_nameless_compound_to_bytes(protocol_version, &root)?)

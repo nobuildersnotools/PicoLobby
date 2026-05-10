@@ -12,6 +12,10 @@ impl StatusResponsePacket {
         StatusResponsePacket { json_response }
     }
 
+    pub fn json_response(&self) -> &str {
+        &self.json_response
+    }
+
     pub fn status_response(&self) -> serde_json::Result<StatusResponse> {
         serde_json::from_str(self.json_response.as_str())
     }

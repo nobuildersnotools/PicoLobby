@@ -7,7 +7,7 @@ use serde::Serialize;
 pub struct RegistryEntry {
     value: RegistryEntryValue,
     #[serde(skip_serializing)]
-    raw_value: Value,
+    raw_value: Option<Value>,
     registry_key: RegistryKey,
     protocol_id: u32,
 }
@@ -15,7 +15,7 @@ pub struct RegistryEntry {
 impl RegistryEntry {
     pub const fn new(
         value: RegistryEntryValue,
-        raw_value: Value,
+        raw_value: Option<Value>,
         registry_key: RegistryKey,
         protocol_id: u32,
     ) -> Self {
@@ -42,7 +42,7 @@ impl RegistryEntry {
         &self.registry_key
     }
 
-    pub const fn get_raw_value(&self) -> &Value {
-        &self.raw_value
+    pub const fn get_raw_value(&self) -> Option<&Value> {
+        self.raw_value.as_ref()
     }
 }

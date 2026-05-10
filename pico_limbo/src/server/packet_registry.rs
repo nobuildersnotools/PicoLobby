@@ -8,6 +8,7 @@ use minecraft_packets::configuration::client_bound_known_packs_packet::ClientBou
 use minecraft_packets::configuration::configuration_client_bound_plugin_message_packet::ConfigurationClientBoundPluginMessagePacket;
 use minecraft_packets::configuration::finish_configuration_packet::FinishConfigurationPacket;
 use minecraft_packets::configuration::registry_data_packet::RegistryDataPacket;
+use minecraft_packets::configuration::server_bound_known_packs_packet::ServerBoundKnownPacksPacket;
 use minecraft_packets::configuration::update_tags_packet::UpdateTagsPacket;
 use minecraft_packets::handshaking::handshake_packet::HandshakePacket;
 use minecraft_packets::login::custom_query_answer_packet::CustomQueryAnswerPacket;
@@ -42,6 +43,7 @@ use minecraft_packets::play::player_input_packet::PlayerInputPacket;
 use minecraft_packets::play::remove_entities_packet::RemoveEntitiesPacket;
 use minecraft_packets::play::rotate_head_packet::RotateHeadPacket;
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
+use minecraft_packets::play::server_data_packet::ServerDataPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
 use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnPositionPacket;
@@ -184,6 +186,13 @@ pub enum PacketRegistry {
 
     #[protocol_id(
         state = "configuration",
+        bound = "serverbound",
+        name = "minecraft:select_known_packs"
+    )]
+    ServerBoundKnownPacks(ServerBoundKnownPacksPacket),
+
+    #[protocol_id(
+        state = "configuration",
         bound = "clientbound",
         name = "minecraft:registry_data"
     )]
@@ -277,6 +286,9 @@ pub enum PacketRegistry {
 
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:system_chat")]
     SystemChatMessage(SystemChatMessagePacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:server_data")]
+    ServerData(ServerDataPacket),
 
     #[protocol_id(
         state = "play",
@@ -456,6 +468,7 @@ impl PacketHandler for PacketRegistry {
             Self::CustomQueryAnswer(packet) => packet.handle(client_state, server_state),
             Self::LoginAcknowledged(packet) => packet.handle(client_state, server_state),
             Self::AcknowledgeConfiguration(packet) => packet.handle(client_state, server_state),
+            Self::ServerBoundKnownPacks(packet) => packet.handle(client_state, server_state),
             Self::SetPlayerPositionAndRotation(packet) => packet.handle(client_state, server_state),
             Self::SetPlayerPosition(packet) => packet.handle(client_state, server_state),
             Self::ChatCommand(packet) => packet.handle(client_state, server_state),
@@ -565,6 +578,21 @@ mod tests {
             raw_packet.bytes(),
             &[61, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,]
         );
+    }
+
+    #[test]
+    fn encodes_v1_19_server_data_with_secure_profiles_disabled() {
+        for (protocol_version, packet_id, data) in [
+            (ProtocolVersion::V1_19, 63, vec![0, 0, 0]),
+            (ProtocolVersion::V1_19_1, 66, vec![0, 0, 0, 0]),
+        ] {
+            let packet =
+                PacketRegistry::ServerData(ServerDataPacket::disable_secure_profile_enforcement());
+            let raw_packet = packet.encode_packet(protocol_version).unwrap();
+
+            assert_eq!(raw_packet.packet_id(), Some(packet_id));
+            assert_eq!(raw_packet.data(), data);
+        }
     }
 
     #[test]

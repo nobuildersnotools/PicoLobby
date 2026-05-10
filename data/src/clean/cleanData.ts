@@ -68,7 +68,9 @@ export async function cleanDataDirectory(
 const REGISTRIES_TO_SEND = [
     "damage_type",
     "dimension_type",
+    "jukebox_song",
     "painting_variant",
+    "trim_material",
     "wolf_variant",
     "worldgen/biome",
     // The following registries were added in 1.21.5
@@ -82,6 +84,7 @@ const REGISTRIES_TO_SEND = [
     "dialog",
     "tags/dialog",
     // The following registries were added in 1.21.11
+    "instrument",
     "zombie_nautilus_variant",
     "timeline",
     "tags/timeline",

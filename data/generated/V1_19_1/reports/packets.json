@@ -83,6 +83,9 @@
             "minecraft:rotate_head": {
                 "protocol_id": 63
             },
+            "minecraft:server_data": {
+                "protocol_id": 66
+            },
             "minecraft:set_action_bar_text": {
                 "protocol_id": 67
             },

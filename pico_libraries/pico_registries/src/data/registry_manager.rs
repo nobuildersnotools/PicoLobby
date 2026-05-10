@@ -56,27 +56,28 @@ impl RegistryManagerBuilder {
         self
     }
 
-    /// Build the `RegistryManager` by loading all registered registries from the resource path
-    #[must_use]
-    pub fn load_from_resource_path(self, resource_path: &Path) -> RegistryManager {
+    /// Build the `RegistryManager` by loading all registered registries from the resource path.
+    ///
+    /// # Errors
+    /// Returns an error if a mandatory registry cannot be loaded.
+    pub fn load_from_resource_path(self, resource_path: &Path) -> crate::Result<RegistryManager> {
         let data_path = resource_path.join("data");
-        let registries = self
-            .registry_keys
-            .iter()
-            .filter_map(|registry_key| {
-                Registry::load(registry_key, &data_path).map_or_else(
-                    |_| {
-                        debug!(
-                            registry_key = ?registry_key,
-                            "Failed to load registry, skipping"
-                        );
-                        None
-                    },
-                    |registry| Some((registry_key.clone(), registry)),
-                )
-            })
-            .collect();
-        RegistryManager { registries }
+        let mut registries = HashMap::new();
+        for registry_key in &self.registry_keys {
+            match Registry::load(registry_key, &data_path) {
+                Ok(registry) => {
+                    registries.insert(registry_key.clone(), registry);
+                }
+                Err(error) if registry_key.is_mandatory() => return Err(error),
+                Err(_) => {
+                    debug!(
+                        registry_key = ?registry_key,
+                        "Failed to load optional registry, skipping"
+                    );
+                }
+            }
+        }
+        Ok(RegistryManager { registries })
     }
 
     /// Register the default set of registry keys

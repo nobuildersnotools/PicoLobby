@@ -22,6 +22,7 @@ pub mod player_position_packet;
 pub mod remove_entities_packet;
 pub mod rotate_head_packet;
 pub mod server_bound_player_abilities_packet;
+pub mod server_data_packet;
 pub mod set_action_bar_text_packet;
 pub mod set_chunk_cache_center_packet;
 pub mod set_default_spawn_position_packet;

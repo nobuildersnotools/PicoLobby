@@ -30,6 +30,7 @@ pub struct StatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub favicon: Option<String>,
     #[serde(
+        rename = "enforcesSecureChat",
         alias = "enforcesSecureChat",
         default = "get_default_enforces_secure_chat"
     )]

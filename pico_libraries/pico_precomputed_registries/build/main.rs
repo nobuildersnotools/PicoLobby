@@ -79,7 +79,7 @@ pub struct StaticDimensionInfo {{
 
 pub struct StaticRegistryDataEntry {{
     pub entry_id: &'static str,
-    pub nbt_bytes: &'static [u8],
+    pub nbt_bytes: Option<&'static [u8]>,
 }}
 
 pub struct StaticTaggedRegistry {{
@@ -246,7 +246,10 @@ fn build_registry_data_map(w: &mut impl Write, bw: &mut BlobWriter) -> anyhow::R
                 write!(vec_str, "({:?}, &[", ident.thing)?;
 
                 for entry in inner_entries {
-                    let nbt_code = bw.save_blob(&entry.nbt_bytes)?;
+                    let nbt_code = match &entry.nbt_bytes {
+                        Some(nbt_bytes) => format!("Some({})", bw.save_blob(nbt_bytes)?),
+                        None => "None".to_string(),
+                    };
 
                     write!(
                         vec_str,

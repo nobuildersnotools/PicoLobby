@@ -90,6 +90,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_should_serialize_secure_chat_status_with_vanilla_field_name() {
+        // Given
+        let server_state = server();
+        let mut client_state = client(&server_state, ProtocolVersion::V1_19_1.version_number());
+        let status_request_packet = StatusRequestPacket::default();
+
+        // When
+        let batch = status_request_packet
+            .handle(&mut client_state, &server_state)
+            .unwrap();
+        let mut batch = batch.into_stream();
+
+        // Then
+        let PacketRegistry::StatusResponse(status_packet) = batch.next().await.unwrap() else {
+            panic!("expected status response packet");
+        };
+        assert!(
+            status_packet
+                .json_response()
+                .contains("\"enforcesSecureChat\":false")
+        );
+        assert!(
+            !status_packet
+                .json_response()
+                .contains("enforces_secure_chat")
+        );
+        assert!(batch.next().await.is_none());
+    }
+
+    #[tokio::test]
     async fn test_should_respond_with_any_version() {
         // Given
         let expected_protocol = -1;

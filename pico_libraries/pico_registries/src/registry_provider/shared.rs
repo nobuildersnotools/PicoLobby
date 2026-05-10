@@ -20,9 +20,9 @@ pub fn load_registry_manager(
 
     let resource_root = base_path.join(protocol_version.data().to_string());
 
-    Ok(RegistryManager::builder()
+    RegistryManager::builder()
         .register_all(registries)
-        .load_from_resource_path(&resource_root))
+        .load_from_resource_path(&resource_root)
 }
 
 pub fn get_registry_keys(protocol_version: ProtocolVersion) -> crate::Result<Vec<RegistryKeys>> {

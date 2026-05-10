@@ -7,12 +7,12 @@ use std::borrow::Cow;
 
 pub struct RegistryDataEntry {
     pub entry_id: Identifier,
-    pub nbt_bytes: Cow<'static, [u8]>,
+    pub nbt_bytes: Option<Cow<'static, [u8]>>,
 }
 
 impl RegistryDataEntry {
     #[must_use]
-    pub const fn new(entry_id: Identifier, nbt_bytes: Cow<'static, [u8]>) -> Self {
+    pub const fn new(entry_id: Identifier, nbt_bytes: Option<Cow<'static, [u8]>>) -> Self {
         Self {
             entry_id,
             nbt_bytes,
@@ -39,13 +39,19 @@ pub fn get_registry_data_v1_20_5(
                 .get_entries()
                 .iter()
                 .flat_map(|entry| -> crate::Result<RegistryDataEntry> {
-                    let bytes = entry.get_raw_value().to_byte(
-                        CompressionType::None,
-                        NbtOptions::new().nameless_root(true).dynamic_lists(true),
-                        None,
-                    )?;
+                    let bytes = entry
+                        .get_raw_value()
+                        .map(|raw_value| {
+                            raw_value.to_byte(
+                                CompressionType::None,
+                                NbtOptions::new().nameless_root(true).dynamic_lists(true),
+                                None,
+                            )
+                        })
+                        .transpose()?
+                        .map(Cow::Owned);
                     let entry_id = entry.get_registry_key().get_value().clone();
-                    Ok(RegistryDataEntry::new(entry_id, Cow::Owned(bytes)))
+                    Ok(RegistryDataEntry::new(entry_id, bytes))
                 })
                 .collect();
             let registry_id = registry.get_registry_key().get_value().clone();

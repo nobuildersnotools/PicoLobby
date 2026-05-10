@@ -20,6 +20,7 @@ use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
+use minecraft_packets::play::server_data_packet::ServerDataPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
 use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnPositionPacket;
@@ -208,6 +209,11 @@ pub fn send_play_packets(
 
     let packet = login_packet.set_entity_id(client_state.entity_id());
     batch.queue(|| PacketRegistry::Login(Box::new(packet)));
+
+    if protocol_version.between_inclusive(ProtocolVersion::V1_19, ProtocolVersion::V1_19_1) {
+        let packet = ServerDataPacket::disable_secure_profile_enforcement();
+        batch.queue(|| PacketRegistry::ServerData(packet));
+    }
 
     let is_flying = game_mode == GameMode::Spectator;
     let allow_flying = server_state.allow_flight() || is_flying;
@@ -646,6 +652,10 @@ mod tests {
         assert!(matches!(
             batch.next().await.unwrap(),
             PacketRegistry::Login(_)
+        ));
+        assert!(matches!(
+            batch.next().await.unwrap(),
+            PacketRegistry::ServerData(_)
         ));
         assert!(matches!(
             batch.next().await.unwrap(),

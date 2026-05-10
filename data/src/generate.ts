@@ -96,7 +96,38 @@ const SUPPORTED_VERSIONS = [
         // await cleanReportsDirectory(reportsDirectory);
         await rm(generatedDirectory, { recursive: true, force: true });
     }
+
+    await copyCompatibilityTrimMaterials();
 })();
+
+const TRIM_MATERIAL_COMPATIBILITY_VERSIONS = ["1.19.4", "1.20", "1.20.2"];
+
+async function copyCompatibilityTrimMaterials(): Promise<void> {
+    const source = join(
+        process.cwd(),
+        "generated",
+        "V1_20_5",
+        "data",
+        "minecraft",
+        "trim_material",
+    );
+
+    if (!(await fileExists(source))) {
+        return;
+    }
+
+    for (const version of TRIM_MATERIAL_COMPATIBILITY_VERSIONS) {
+        const destination = join(
+            process.cwd(),
+            "generated",
+            `V${version.replaceAll(".", "_")}`,
+            "data",
+            "minecraft",
+            "trim_material",
+        );
+        await copyDir(source, destination);
+    }
+}
 
 const move = async (
     from: string,
