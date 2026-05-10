@@ -12,6 +12,7 @@ pub mod disconnect_packet;
 pub mod game_event_packet;
 pub mod legacy_chat_message_packet;
 pub mod legacy_set_title_packet;
+pub mod light_update_packet;
 pub mod login_packet;
 pub mod move_entity_packet;
 pub mod player_command_packet;

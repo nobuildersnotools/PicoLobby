@@ -90,6 +90,17 @@ impl EncodePacket for PaletteContainer {
                 bits_per_entry,
                 value,
             } => {
+                // 1.16/1.17 section readers clamp block BPE below 4, so encode
+                // single-value block palettes as a one-entry indirect palette.
+                if protocol_version
+                    .between_inclusive(ProtocolVersion::V1_16, ProtocolVersion::V1_17_1)
+                {
+                    4u8.encode(writer, protocol_version)?;
+                    LengthPaddedVec::new(vec![value.clone()]).encode(writer, protocol_version)?;
+                    LengthPaddedVec::new(vec![0u64; 256]).encode(writer, protocol_version)?;
+                    return Ok(());
+                }
+
                 bits_per_entry.encode(writer, protocol_version)?;
                 value.encode(writer, protocol_version)?;
                 if protocol_version.is_before_inclusive(ProtocolVersion::V1_21_4) {

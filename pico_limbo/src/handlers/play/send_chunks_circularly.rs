@@ -1,10 +1,12 @@
 use crate::server::packet_registry::PacketRegistry;
 use blocks_report::get_block_report_id_mapping;
 use minecraft_packets::play::chunk_data_and_update_light_packet::ChunkDataAndUpdateLightPacket;
+use minecraft_packets::play::light_update_packet::LightUpdatePacket;
 use minecraft_packets::play::{VoidChunkContext, WorldContext};
 use minecraft_protocol::prelude::{Coordinates, ProtocolVersion};
 use pico_registries::registry_provider::DimensionInfo;
 use pico_structures::prelude::World;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 #[derive(Copy, Clone)]
@@ -104,6 +106,7 @@ pub struct CircularChunkPacketIterator {
     schematic_context: Option<WorldContext>,
     spiral_iterator: SpiralIterator,
     protocol_version: ProtocolVersion,
+    pending_packets: VecDeque<PacketRegistry>,
 }
 
 impl CircularChunkPacketIterator {
@@ -134,7 +137,53 @@ impl CircularChunkPacketIterator {
             schematic_context,
             spiral_iterator: SpiralIterator::new(center_x, center_z, view_distance),
             protocol_version,
+            pending_packets: VecDeque::new(),
         }
+    }
+
+    fn legacy_light_update_packet(
+        &self,
+        chunk_context: VoidChunkContext,
+    ) -> Option<PacketRegistry> {
+        if !self
+            .protocol_version
+            .between_inclusive(ProtocolVersion::V1_16, ProtocolVersion::V1_17_1)
+        {
+            return None;
+        }
+
+        let packet = self.schematic_context.as_ref().map_or_else(
+            || {
+                LightUpdatePacket::new_void(
+                    chunk_context.chunk_x,
+                    chunk_context.chunk_z,
+                    chunk_context.dimension_height,
+                )
+            },
+            |context| match (
+                context
+                    .world
+                    .get_chunk_sky_light(chunk_context.chunk_x, chunk_context.chunk_z),
+                context
+                    .world
+                    .get_chunk_block_light(chunk_context.chunk_x, chunk_context.chunk_z),
+            ) {
+                (Some(sky_light), Some(block_light)) => LightUpdatePacket::from_light_data(
+                    chunk_context.chunk_x,
+                    chunk_context.chunk_z,
+                    sky_light,
+                    block_light,
+                    chunk_context.dimension_height,
+                ),
+                _ => LightUpdatePacket::new_void(
+                    chunk_context.chunk_x,
+                    chunk_context.chunk_z,
+                    chunk_context.dimension_height,
+                ),
+            },
+        );
+
+        Some(PacketRegistry::LightUpdate(Box::new(packet)))
     }
 }
 
@@ -142,6 +191,10 @@ impl Iterator for CircularChunkPacketIterator {
     type Item = PacketRegistry;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(packet) = self.pending_packets.pop_front() {
+            return Some(packet);
+        }
+
         let (chunk_x, chunk_z) = self.spiral_iterator.next()?;
 
         let chunk_context = VoidChunkContext {
@@ -161,6 +214,62 @@ impl Iterator for CircularChunkPacketIterator {
             None => ChunkDataAndUpdateLightPacket::void(chunk_context),
         };
 
+        if let Some(light_update_packet) = self.legacy_light_update_packet(chunk_context) {
+            self.pending_packets.push_back(light_update_packet);
+        }
+
         Some(PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pico_registries::Identifier;
+
+    fn dimension_info() -> DimensionInfo {
+        DimensionInfo {
+            height: 256,
+            min_y: 0,
+            protocol_id: 0,
+            registry_key: Identifier::vanilla_unchecked("overworld"),
+        }
+    }
+
+    #[test]
+    fn v1_17_chunks_are_followed_by_light_updates() {
+        let mut iter = CircularChunkPacketIterator::new(
+            (0, 0),
+            0,
+            None,
+            1,
+            &dimension_info(),
+            ProtocolVersion::V1_17,
+        );
+
+        assert!(matches!(
+            iter.next(),
+            Some(PacketRegistry::ChunkDataAndUpdateLight(_))
+        ));
+        assert!(matches!(iter.next(), Some(PacketRegistry::LightUpdate(_))));
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn v1_18_chunks_keep_light_in_chunk_packet() {
+        let mut iter = CircularChunkPacketIterator::new(
+            (0, 0),
+            0,
+            None,
+            1,
+            &dimension_info(),
+            ProtocolVersion::V1_18,
+        );
+
+        assert!(matches!(
+            iter.next(),
+            Some(PacketRegistry::ChunkDataAndUpdateLight(_))
+        ));
+        assert!(iter.next().is_none());
     }
 }

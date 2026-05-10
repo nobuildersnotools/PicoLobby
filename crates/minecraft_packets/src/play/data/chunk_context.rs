@@ -3,6 +3,7 @@ use minecraft_protocol::prelude::Coordinates;
 use pico_structures::prelude::World;
 use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 pub struct VoidChunkContext {
     pub chunk_x: i32,
     pub chunk_z: i32,

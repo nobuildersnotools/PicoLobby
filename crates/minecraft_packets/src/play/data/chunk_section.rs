@@ -110,4 +110,26 @@ mod tests {
             assert_eq!(expected_bytes, bytes, "Mismatch for version {version}");
         }
     }
+
+    #[test]
+    fn legacy_chunk_sections_use_indirect_block_palette() {
+        for version in [ProtocolVersion::V1_16, ProtocolVersion::V1_17_1] {
+            let packet = create_packet();
+            let mut bytes = BinaryWriter::default();
+
+            packet.encode(&mut bytes, version).unwrap();
+
+            let bytes = bytes.into_inner();
+            assert_eq!(2055, bytes.len(), "Mismatch for version {version:?}");
+            assert_eq!(
+                &[0x00, 0x00, 0x04, 0x01, 0x00, 0x80, 0x02],
+                &bytes[..7],
+                "Mismatch for version {version:?}"
+            );
+            assert!(
+                bytes[7..].iter().all(|byte| *byte == 0),
+                "Expected zero-filled block state data for version {version:?}"
+            );
+        }
+    }
 }

@@ -32,6 +32,7 @@ use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_packets::play::game_event_packet::GameEventPacket;
 use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket;
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
+use minecraft_packets::play::light_update_packet::LightUpdatePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::move_entity_packet::{
     MoveEntityPosPacket, MoveEntityPosRotPacket, MoveEntityRotPacket,
@@ -276,6 +277,9 @@ pub enum PacketRegistry {
         name = "minecraft:level_chunk_with_light"
     )]
     ChunkDataAndUpdateLight(Box<ChunkDataAndUpdateLightPacket>),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:light_update")]
+    LightUpdate(Box<LightUpdatePacket>),
 
     #[protocol_id(
         state = "play",
@@ -852,5 +856,21 @@ mod tests {
         .unwrap();
         assert_eq!(raw_packet.packet_id(), Some(35));
         assert_eq!(raw_packet.data().len(), 63);
+    }
+
+    #[test]
+    fn encodes_legacy_light_update_packet_ids() {
+        for (protocol_version, packet_id) in [
+            (ProtocolVersion::V1_16, 36),
+            (ProtocolVersion::V1_16_2, 35),
+            (ProtocolVersion::V1_17, 37),
+        ] {
+            let raw_packet =
+                PacketRegistry::LightUpdate(Box::new(LightUpdatePacket::new_void(0, 0, 256)))
+                    .encode_packet(protocol_version)
+                    .unwrap();
+
+            assert_eq!(raw_packet.packet_id(), Some(packet_id));
+        }
     }
 }

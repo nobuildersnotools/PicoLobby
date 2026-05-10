@@ -65,6 +65,9 @@
             "minecraft:level_chunk_with_light": {
                 "protocol_id": 32
             },
+            "minecraft:light_update": {
+                "protocol_id": 35
+            },
             "minecraft:login": {
                 "protocol_id": 36
             },
