@@ -290,8 +290,10 @@ fn generate_encode_impl(
                     .and_then(|directions| directions.get("clientbound"))
                     .and_then(|packets| packets.get(packet_name));
 
-                if let Some(packet_info) = packet_info {
-                    let id = packet_info.protocol_id;
+                if let Some(id) = packet_info
+                    .map(|packet_info| packet_info.protocol_id)
+                    .or_else(|| clientbound_packet_id_override(version_number, packet_name))
+                {
                     Some(quote! { #version_number => #id, })
                 } else {
                     None
@@ -329,5 +331,13 @@ fn capitalize_first(s: &str) -> String {
     match c.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+fn clientbound_packet_id_override(version_number: i32, packet_name: &str) -> Option<u8> {
+    match (version_number, packet_name) {
+        (477, "minecraft:light_update") => Some(36),
+        (573, "minecraft:light_update") => Some(37),
+        _ => None,
     }
 }

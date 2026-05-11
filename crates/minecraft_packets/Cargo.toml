@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 blocks_report = { path = "../blocks_report" }
+flate2 = { workspace = true }
 minecraft_protocol = { path = "../minecraft_protocol" }
 pico_text_component = { path = "../pico_text_component" }
 pico_structures = { path = "../pico_structures" }

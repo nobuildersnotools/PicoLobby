@@ -35,8 +35,8 @@ use minecraft_packets::play::update_time_packet::UpdateTimePacket;
 use minecraft_protocol::prelude::{Dimension as ProtocolDimension, ProtocolVersion, State};
 use pico_precomputed_registries::PrecomputedRegistries;
 use pico_registries::Identifier;
-use pico_registries::registry_provider::Dimension as RegistryDimension;
 use pico_registries::registry_provider::RegistryProvider;
+use pico_registries::registry_provider::{Dimension as RegistryDimension, DimensionInfo};
 use pico_structures::prelude::SchematicError;
 use pico_text_component::prelude::Component;
 use std::num::TryFromIntError;
@@ -133,16 +133,14 @@ fn prepare_chunk_packets(
     position: (f64, f64),
     server_state: &ServerState,
 ) -> Result<Option<PreparedChunkPackets>, PacketHandlerError> {
-    if !protocol_version.is_after_inclusive(ProtocolVersion::V1_16) {
-        return Ok(None);
-    }
-
     let registry_provider = PrecomputedRegistries::new(protocol_version);
     let center_chunk = world_position_to_chunk_position(position)?;
     let biome_id = registry_provider
         .get_biome_protocol_id(&Identifier::vanilla_unchecked("plains"))
         .unwrap_or(1); // Plains biome ID is 1 before 1.13
-    let dimension_info = registry_provider.get_dimension_info(to_registry_dimension(dimension))?;
+    let dimension_info = registry_provider
+        .get_dimension_info(to_registry_dimension(dimension))
+        .unwrap_or_else(|_| legacy_dimension_info(dimension));
 
     Ok(Some((
         center_chunk,
@@ -155,6 +153,19 @@ fn prepare_chunk_packets(
             protocol_version,
         ),
     )))
+}
+
+fn legacy_dimension_info(dimension: ProtocolDimension) -> DimensionInfo {
+    DimensionInfo {
+        height: 256,
+        min_y: 0,
+        protocol_id: 0,
+        registry_key: match dimension {
+            ProtocolDimension::Overworld => Identifier::vanilla_unchecked("overworld"),
+            ProtocolDimension::Nether => Identifier::vanilla_unchecked("the_nether"),
+            ProtocolDimension::End => Identifier::vanilla_unchecked("the_end"),
+        },
+    }
 }
 
 impl From<SchematicError> for PacketHandlerError {
@@ -744,6 +755,10 @@ mod tests {
             batch.next().await.unwrap(),
             PacketRegistry::SetEntityMetadata(_)
         ));
+        assert!(matches!(
+            batch.next().await.unwrap(),
+            PacketRegistry::ChunkDataAndUpdateLight(_)
+        ));
         assert!(batch.next().await.is_none());
     }
 
@@ -782,6 +797,10 @@ mod tests {
         assert!(matches!(
             batch.next().await.unwrap(),
             PacketRegistry::SetEntityMetadata(_)
+        ));
+        assert!(matches!(
+            batch.next().await.unwrap(),
+            PacketRegistry::ChunkDataAndUpdateLight(_)
         ));
         assert!(batch.next().await.is_none());
     }

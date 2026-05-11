@@ -6,46 +6,90 @@ use minecraft_protocol::prelude::*;
 /// This packet is only mandatory for versions above 1.20.3,
 /// thus the packet is only implemented to work on versions after 1.20.3.
 /// The GameEventPacket must be sent before sending this one.
-#[derive(PacketOut)]
 pub struct ChunkDataAndUpdateLightPacket {
     chunk_x: i32,
     chunk_z: i32,
 
-    #[pvn(..755)]
     full_chunk: bool,
 
     /// If false, the client will recalculate lighting based on the old/new chunk data
-    #[pvn(..751)]
     ignore_old_data: bool,
 
     /// BitSet with bits (world height in blocks / 16) set to 1 for every 16×16×16 chunk section whose data is included in Data. The least significant bit represents the chunk section at the bottom of the chunk column (from the lowest y to 15 blocks above).
     /// Up until 1.17.1 included
-    #[pvn(755..757)]
     v1_17_primary_bit_mask: LengthPaddedVec<u64>, // availableSections bitset?
 
-    #[pvn(..755)]
     primary_bit_mask: VarInt,
 
     chunk_data: ChunkData,
 
     /// If edges should be trusted for light updates.
     /// Up until 1.19.4 included
-    #[pvn(757..763)]
     trust_edges: bool,
 
     // TODO: Implement Update Light packet for versions prior to 1.18
-    #[pvn(757..)]
     v1_18_light_data: LightData,
+}
+
+impl EncodePacket for ChunkDataAndUpdateLightPacket {
+    fn encode(
+        &self,
+        writer: &mut BinaryWriter,
+        protocol_version: ProtocolVersion,
+    ) -> Result<(), BinaryWriterError> {
+        self.chunk_x.encode(writer, protocol_version)?;
+        self.chunk_z.encode(writer, protocol_version)?;
+
+        if protocol_version.is_before_inclusive(ProtocolVersion::V1_15_2) {
+            self.full_chunk.encode(writer, protocol_version)?;
+            if protocol_version.is_before_inclusive(ProtocolVersion::V1_7_6) {
+                (self.primary_bit_mask.inner() as u16).encode(writer, protocol_version)?;
+                0u16.encode(writer, protocol_version)?;
+            } else if protocol_version.is_before_inclusive(ProtocolVersion::V1_8) {
+                (self.primary_bit_mask.inner() as u16).encode(writer, protocol_version)?;
+            } else {
+                self.primary_bit_mask.encode(writer, protocol_version)?;
+            }
+            self.chunk_data.encode(writer, protocol_version)?;
+            return Ok(());
+        }
+
+        if protocol_version.is_before_inclusive(ProtocolVersion::V1_17) {
+            self.full_chunk.encode(writer, protocol_version)?;
+        }
+        if protocol_version.is_before_inclusive(ProtocolVersion::V1_16_1) {
+            self.ignore_old_data.encode(writer, protocol_version)?;
+        }
+        if protocol_version.between_inclusive(ProtocolVersion::V1_17, ProtocolVersion::V1_17_1) {
+            self.v1_17_primary_bit_mask
+                .encode(writer, protocol_version)?;
+        }
+        if protocol_version.is_before_inclusive(ProtocolVersion::V1_16_4) {
+            self.primary_bit_mask.encode(writer, protocol_version)?;
+        }
+
+        self.chunk_data.encode(writer, protocol_version)?;
+
+        if protocol_version.between_inclusive(ProtocolVersion::V1_18, ProtocolVersion::V1_19_4) {
+            self.trust_edges.encode(writer, protocol_version)?;
+        }
+        if protocol_version.is_after_inclusive(ProtocolVersion::V1_18) {
+            self.v1_18_light_data.encode(writer, protocol_version)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl ChunkDataAndUpdateLightPacket {
     pub fn void(context: VoidChunkContext) -> Self {
         let dimension_height = context.dimension_height;
+        let all_sections_bit_mask = (1i32 << (dimension_height / 16).min(16)) - 1;
         Self {
             chunk_x: context.chunk_x,
             chunk_z: context.chunk_z,
-            v1_17_primary_bit_mask: LengthPaddedVec::default(),
-            primary_bit_mask: VarInt::default(),
+            v1_17_primary_bit_mask: LengthPaddedVec::new(vec![all_sections_bit_mask as u64]),
+            primary_bit_mask: VarInt::new(all_sections_bit_mask),
             full_chunk: true,
             ignore_old_data: false,
             chunk_data: ChunkData::void(context),

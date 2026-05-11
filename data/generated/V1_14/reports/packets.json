@@ -56,6 +56,9 @@
             "minecraft:keep_alive": {
                 "protocol_id": 32
             },
+            "minecraft:level_chunk_with_light": {
+                "protocol_id": 33
+            },
             "minecraft:legacy_chat_message": {
                 "protocol_id": 14
             },

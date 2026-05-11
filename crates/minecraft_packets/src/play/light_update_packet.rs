@@ -8,10 +8,10 @@ pub struct LightUpdatePacket {
     chunk_x: VarInt,
     chunk_z: VarInt,
 
-    #[pvn(..757)]
+    #[pvn(735..757)]
     trust_edges: bool,
 
-    #[pvn(..757)]
+    #[pvn(477..757)]
     legacy_light_data: LegacyLightData,
 }
 
@@ -84,7 +84,8 @@ impl EncodePacket for LegacyLightData {
             self.sky_light_mask.encode(writer, protocol_version)?;
             self.block_light_mask.encode(writer, protocol_version)?;
             self.empty_sky_light_mask.encode(writer, protocol_version)?;
-            self.empty_block_light_mask.encode(writer, protocol_version)?;
+            self.empty_block_light_mask
+                .encode(writer, protocol_version)?;
             for light in self.sky_light_arrays.inner() {
                 light.encode(writer, protocol_version)?;
             }
@@ -198,6 +199,22 @@ mod tests {
     }
 
     #[test]
+    fn v1_14_light_update_has_no_trust_edges() {
+        let packet = LightUpdatePacket::new_void(3, -2, 256);
+        let mut bytes = BinaryWriter::default();
+
+        packet.encode(&mut bytes, ProtocolVersion::V1_14_4).unwrap();
+
+        let bytes = bytes.into_inner();
+        // chunk_x=3, chunk_z=-2, then masks immediately; no trust_edges field.
+        assert_eq!(
+            &[0x03, 0xFE, 0xFF, 0xFF, 0xFF, 0x0F, 0xFF, 0xFF, 0x0F],
+            &bytes[..9]
+        );
+        assert_eq!(14 + (2 * (18 * 2050)), bytes.len());
+    }
+
+    #[test]
     fn v1_17_light_update_uses_bitset_masks() {
         // 1.17 changed light masks from VarInt to BitSet (VarInt length + i64 array).
         // For 256-height: 18 sections, mask = (1<<18)-1 = 0x3FFFF = 262143.
@@ -211,9 +228,15 @@ mod tests {
         // chunk_x=0, chunk_z=0, trust_edges=true
         assert_eq!(&[0x00, 0x00, 0x01], &bytes[..3]);
         // sky_light_mask as BitSet: VarInt(1)=0x01, then i64(262143)
-        assert_eq!(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF], &bytes[3..12]);
+        assert_eq!(
+            &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF],
+            &bytes[3..12]
+        );
         // block_light_mask identical
-        assert_eq!(&[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF], &bytes[12..21]);
+        assert_eq!(
+            &[0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xFF, 0xFF],
+            &bytes[12..21]
+        );
         // empty_sky_light_mask as BitSet: VarInt(0)
         assert_eq!(0x00, bytes[21]);
         // empty_block_light_mask as BitSet: VarInt(0)

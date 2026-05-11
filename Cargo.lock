@@ -1037,6 +1037,7 @@ name = "minecraft_packets"
 version = "0.1.0"
 dependencies = [
  "blocks_report",
+ "flate2",
  "minecraft_protocol",
  "pico_nbt",
  "pico_structures",

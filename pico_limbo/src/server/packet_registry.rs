@@ -488,7 +488,8 @@ impl PacketHandler for PacketRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minecraft_protocol::prelude::Uuid;
+    use minecraft_packets::play::VoidChunkContext;
+    use minecraft_protocol::prelude::{BinaryReader, DecodePacket, Uuid, VarInt};
 
     #[test]
     fn decodes_current_player_command_packet() {
@@ -861,6 +862,8 @@ mod tests {
     #[test]
     fn encodes_legacy_light_update_packet_ids() {
         for (protocol_version, packet_id) in [
+            (ProtocolVersion::V1_14, 36),
+            (ProtocolVersion::V1_15, 37),
             (ProtocolVersion::V1_16, 36),
             (ProtocolVersion::V1_16_2, 35),
             (ProtocolVersion::V1_17, 37),
@@ -872,5 +875,114 @@ mod tests {
 
             assert_eq!(raw_packet.packet_id(), Some(packet_id));
         }
+    }
+
+    #[test]
+    fn encodes_pre_v1_16_chunk_packet_ids() {
+        for (protocol_version, packet_id) in [
+            (ProtocolVersion::V1_7_2, 33),
+            (ProtocolVersion::V1_8, 33),
+            (ProtocolVersion::V1_12_2, 32),
+            (ProtocolVersion::V1_13, 34),
+            (ProtocolVersion::V1_13_2, 34),
+            (ProtocolVersion::V1_14_4, 33),
+            (ProtocolVersion::V1_15_2, 34),
+        ] {
+            let packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+                chunk_x: 0,
+                chunk_z: 0,
+                biome_index: 1,
+                dimension_height: 256,
+                dimension_min_y: 0,
+            });
+            let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet))
+                .encode_packet(protocol_version)
+                .unwrap();
+
+            assert_eq!(raw_packet.packet_id(), Some(packet_id));
+            assert!(!raw_packet.data().is_empty());
+        }
+    }
+
+    #[test]
+    fn v1_8_chunk_header_uses_varint_data_length_after_primary_mask() {
+        let packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+            chunk_x: 0,
+            chunk_z: 0,
+            biome_index: 1,
+            dimension_height: 256,
+            dimension_min_y: 0,
+        });
+        let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet))
+            .encode_packet(ProtocolVersion::V1_8)
+            .unwrap();
+        let data = raw_packet.data();
+
+        assert_eq!(raw_packet.packet_id(), Some(33));
+        assert_eq!(&data[0..11], &[0, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0xFF]);
+
+        let mut reader = BinaryReader::new(&data[11..]);
+        let payload_len = VarInt::decode(&mut reader, ProtocolVersion::V1_8)
+            .unwrap()
+            .inner() as usize;
+
+        assert_eq!(payload_len, reader.remaining());
+    }
+
+    #[test]
+    fn v1_9_to_v1_12_chunk_payload_has_no_trailing_block_entity_count() {
+        for protocol_version in [
+            ProtocolVersion::V1_9,
+            ProtocolVersion::V1_10,
+            ProtocolVersion::V1_11,
+            ProtocolVersion::V1_12_2,
+        ] {
+            let packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+                chunk_x: 0,
+                chunk_z: 0,
+                biome_index: 1,
+                dimension_height: 256,
+                dimension_min_y: 0,
+            });
+            let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet))
+                .encode_packet(protocol_version)
+                .unwrap();
+            let data = raw_packet.data();
+
+            let mut reader = BinaryReader::new(&data[9..]);
+            VarInt::decode(&mut reader, protocol_version).unwrap();
+            let payload_len = VarInt::decode(&mut reader, protocol_version)
+                .unwrap()
+                .inner() as usize;
+
+            assert_eq!(
+                payload_len,
+                reader.remaining(),
+                "unexpected trailing bytes for {protocol_version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_13_chunk_payload_keeps_block_entity_count() {
+        let packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+            chunk_x: 0,
+            chunk_z: 0,
+            biome_index: 1,
+            dimension_height: 256,
+            dimension_min_y: 0,
+        });
+        let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet))
+            .encode_packet(ProtocolVersion::V1_13)
+            .unwrap();
+        let data = raw_packet.data();
+
+        let mut reader = BinaryReader::new(&data[9..]);
+        VarInt::decode(&mut reader, ProtocolVersion::V1_13).unwrap();
+        let payload_len = VarInt::decode(&mut reader, ProtocolVersion::V1_13)
+            .unwrap()
+            .inner() as usize;
+
+        assert_eq!(payload_len + 1, reader.remaining());
     }
 }

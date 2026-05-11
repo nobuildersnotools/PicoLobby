@@ -38,6 +38,9 @@
       "minecraft:keep_alive": {
         "protocol_id": 0
       },
+      "minecraft:level_chunk_with_light": {
+        "protocol_id": 33
+      },
       "minecraft:login": {
         "protocol_id": 1
       },

@@ -121,7 +121,12 @@ impl CircularChunkPacketIterator {
         let (center_x, center_z) = center_chunk;
         let paste_origin = Coordinates::new_uniform(0);
 
-        let schematic_context: Option<WorldContext> = get_block_report_id_mapping(protocol_version)
+        let mapping_version = if protocol_version.is_before_inclusive(ProtocolVersion::V1_15_2) {
+            ProtocolVersion::V1_16
+        } else {
+            protocol_version
+        };
+        let schematic_context: Option<WorldContext> = get_block_report_id_mapping(mapping_version)
             .map_or(None, |report_id_mapping| {
                 world.map(|world_arc| WorldContext {
                     paste_origin,
@@ -147,7 +152,7 @@ impl CircularChunkPacketIterator {
     ) -> Option<PacketRegistry> {
         if !self
             .protocol_version
-            .between_inclusive(ProtocolVersion::V1_16, ProtocolVersion::V1_17_1)
+            .between_inclusive(ProtocolVersion::V1_14, ProtocolVersion::V1_17_1)
         {
             return None;
         }
@@ -253,6 +258,41 @@ mod tests {
         ));
         assert!(matches!(iter.next(), Some(PacketRegistry::LightUpdate(_))));
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn pre_v1_16_chunks_are_sent_without_light_update_packets() {
+        for version in [ProtocolVersion::V1_8, ProtocolVersion::V1_12_2] {
+            let mut iter =
+                CircularChunkPacketIterator::new((0, 0), 0, None, 1, &dimension_info(), version);
+
+            assert!(matches!(
+                iter.next(),
+                Some(PacketRegistry::ChunkDataAndUpdateLight(_))
+            ));
+            assert!(
+                iter.next().is_none(),
+                "unexpected extra packet for {version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_14_and_v1_15_chunks_are_followed_by_light_updates() {
+        for version in [ProtocolVersion::V1_14_4, ProtocolVersion::V1_15_2] {
+            let mut iter =
+                CircularChunkPacketIterator::new((0, 0), 0, None, 1, &dimension_info(), version);
+
+            assert!(matches!(
+                iter.next(),
+                Some(PacketRegistry::ChunkDataAndUpdateLight(_))
+            ));
+            assert!(
+                matches!(iter.next(), Some(PacketRegistry::LightUpdate(_))),
+                "missing light update for {version:?}"
+            );
+            assert!(iter.next().is_none());
+        }
     }
 
     #[test]
