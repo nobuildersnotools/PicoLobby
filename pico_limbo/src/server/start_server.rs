@@ -5,7 +5,7 @@ use crate::configuration::tab_list::TabListMode;
 use crate::configuration::title::TitleConfig;
 use crate::configuration::world_config::boundaries::BoundariesConfig;
 use crate::server::network::Server;
-use crate::server_state::{ServerState, ServerStateBuilderError};
+use crate::server_state::{LobbyDestination, ServerState, ServerStateBuilderError};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing::{Level, debug, error};
@@ -105,6 +105,13 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         server_state_builder.fav_icon(server_icon)?;
     }
 
+    let lobby_destinations = cfg
+        .lobby
+        .servers
+        .into_iter()
+        .map(|e| LobbyDestination::new(e.id, e.display_name, e.server))
+        .collect::<Vec<_>>();
+
     server_state_builder
         .dimension(cfg.world.dimension.into())
         .time_world(cfg.world.time.into())
@@ -115,6 +122,7 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .max_players(cfg.server_list.max_players)
         .set_lobby_enabled(cfg.lobby.enabled)
         .set_lobby_chat_format(cfg.lobby.chat_format)
+        .set_lobby_destinations(lobby_destinations)?
         .show_online_player_count(cfg.server_list.show_online_player_count)
         .game_mode(cfg.default_game_mode.into())
         .hardcore(cfg.hardcore)

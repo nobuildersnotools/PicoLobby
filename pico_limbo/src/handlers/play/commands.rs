@@ -8,6 +8,7 @@ use crate::server_state::{ServerCommand, ServerCommands, ServerState};
 use minecraft_packets::play::chat_command_packet::ChatCommandPacket;
 use minecraft_packets::play::chat_message_packet::ChatMessagePacket;
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
+use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
 use minecraft_packets::play::transfer_packet::TransferPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, VarInt};
 use std::time::Duration;
@@ -130,6 +131,27 @@ fn run_command(
                     );
                 }
             }
+            Command::Server(destination_id) => {
+                let version = client_state.protocol_version();
+                match server_state.resolve_lobby_destination(&destination_id) {
+                    Ok(dest) => {
+                        info!(
+                            "Sending {} to Velocity server '{}' via /server {}",
+                            client_state.get_username(),
+                            dest.server,
+                            destination_id,
+                        );
+                        let packet =
+                            PlayClientBoundPluginMessagePacket::bungeecord_connect(&dest.server);
+                        batch.queue(|| PacketRegistry::PlayClientBoundPluginMessage(packet));
+                    }
+                    Err(err) => {
+                        warn!("{}: {}", client_state.get_username(), err);
+                        let msg = format!("Unknown server: {destination_id}");
+                        batch.queue(move || chat_feedback_packet(version, &msg));
+                    }
+                }
+            }
         }
     }
 }
@@ -146,6 +168,8 @@ pub enum ParseCommandError {
     InvalidHost,
     #[error("invalid port")]
     InvalidPort(#[from] std::num::ParseIntError),
+    #[error("missing destination id")]
+    MissingDestinationId,
 }
 
 enum Command {
@@ -153,6 +177,7 @@ enum Command {
     Fly,
     FlySpeed(f32),
     Transfer(String, i32),
+    Server(String),
 }
 
 impl Command {
@@ -175,6 +200,12 @@ impl Command {
             let port_str = parts.next().unwrap_or("25565");
             let port = port_str.parse::<i32>()?;
             Ok(Self::Transfer(host, port))
+        } else if Self::is_command(server_commands.server(), cmd) {
+            let id = parts
+                .next()
+                .ok_or(ParseCommandError::MissingDestinationId)?
+                .to_string();
+            Ok(Self::Server(id))
         } else {
             Err(ParseCommandError::Unknown)
         }

@@ -6,6 +6,7 @@ pub struct ServerCommands {
     fly: String,
     fly_speed: String,
     transfer: String,
+    server: String,
 }
 
 impl From<CommandsConfig> for ServerCommands {
@@ -15,6 +16,7 @@ impl From<CommandsConfig> for ServerCommands {
             fly: config.fly,
             fly_speed: config.fly_speed,
             transfer: config.transfer,
+            server: config.server,
         }
     }
 }
@@ -39,6 +41,10 @@ impl ServerCommands {
 
     pub fn transfer(&self) -> ServerCommand {
         Self::server_command(self.transfer.clone())
+    }
+
+    pub fn server(&self) -> ServerCommand {
+        Self::server_command(self.server.clone())
     }
 
     fn server_command(alias: String) -> ServerCommand {

@@ -32,6 +32,7 @@ pub fn chat_feedback_packet(version: ProtocolVersion, message: &str) -> PacketRe
     chat_packet_for_version(version, &component)
 }
 
+#[allow(clippy::literal_string_with_formatting_args)]
 fn format_lobby_chat(sender: &str, message: &str, format: &str) -> Component {
     let template = format
         .replace("{sender}", &escape_minimessage_text(sender))

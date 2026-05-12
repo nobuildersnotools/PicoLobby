@@ -8,6 +8,7 @@ pub use lobby::{
     ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
     LobbyMovementPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
 };
+pub use navigation::{LobbyDestination, NavigationError};
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
 use net::raw_packet::RawPacket;
@@ -26,6 +27,7 @@ use tokio::sync::mpsc;
 use tracing::debug;
 
 mod lobby;
+mod navigation;
 mod server_commands;
 
 #[derive(Clone)]
@@ -99,6 +101,7 @@ pub struct ServerState {
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_destinations: Vec<LobbyDestination>,
     lobby_state: Arc<Mutex<LobbyState>>,
     show_online_player_count: bool,
     game_mode: GameMode,
@@ -281,6 +284,13 @@ impl ServerState {
         self.lobby_enabled
     }
 
+    pub fn resolve_lobby_destination(&self, id: &str) -> Result<&LobbyDestination, NavigationError> {
+        self.lobby_destinations
+            .iter()
+            .find(|d| d.id.as_str() == id)
+            .ok_or_else(|| NavigationError::UnknownDestination(id.to_string()))
+    }
+
     pub fn register_lobby_session(&self, client_state: &mut ClientState) -> Option<LobbySession> {
         if !self.lobby_enabled {
             client_state.set_entity_id(0);
@@ -394,7 +404,7 @@ impl ServerState {
         let mut plan = self
             .lobby_state()
             .plan_chat_broadcast(client_state.lobby_session_id()?, message)?;
-        plan.format = self.lobby_chat_format.clone();
+        plan.format.clone_from(&self.lobby_chat_format);
         Some(plan)
     }
 
@@ -473,6 +483,7 @@ pub struct ServerStateBuilder {
     welcome_message: String,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_destinations: Vec<LobbyDestination>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -509,6 +520,8 @@ pub enum ServerStateBuilderError {
     MiniMessage(#[from] MiniMessageError),
     #[error("the configured spawn position Y is below the configured minimum Y position")]
     InvalidSpawnPosition,
+    #[error("lobby server '{0}' has an empty 'server' name; every [[lobby.servers]] entry must specify a Velocity server name")]
+    EmptyServerName(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -598,6 +611,21 @@ impl ServerStateBuilder {
     pub fn set_lobby_chat_format<S: Into<String>>(&mut self, format: S) -> &mut Self {
         self.lobby_chat_format = format.into();
         self
+    }
+
+    pub fn set_lobby_destinations(
+        &mut self,
+        destinations: Vec<LobbyDestination>,
+    ) -> Result<&mut Self, ServerStateBuilderError> {
+        for dest in &destinations {
+            if dest.server.trim().is_empty() {
+                return Err(ServerStateBuilderError::EmptyServerName(
+                    dest.id.as_str().to_string(),
+                ));
+            }
+        }
+        self.lobby_destinations = destinations;
+        Ok(self)
     }
 
     pub const fn game_mode(&mut self, game_mode: GameMode) -> &mut Self {
@@ -802,6 +830,7 @@ impl ServerStateBuilder {
             connected_clients: Arc::new(AtomicU32::new(0)),
             lobby_enabled: self.lobby_enabled,
             lobby_chat_format: self.lobby_chat_format,
+            lobby_destinations: self.lobby_destinations,
             lobby_state: Arc::new(Mutex::new(LobbyState::new())),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
@@ -971,5 +1000,54 @@ mod tests {
                 .is_some()
         );
         assert_eq!(server_state.online_players(), 0);
+    }
+
+    fn server_with_destinations(destinations: Vec<LobbyDestination>) -> ServerState {
+        let mut builder = ServerState::builder();
+        builder.set_lobby_enabled(true);
+        builder.set_lobby_destinations(destinations).unwrap();
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn destination_resolves_to_correct_velocity_server_name() {
+        let server = server_with_destinations(vec![
+            LobbyDestination::new("survival", "Survival", "survival-1"),
+            LobbyDestination::new("creative", "Creative", "creative-1"),
+        ]);
+
+        let dest = server.resolve_lobby_destination("survival").unwrap();
+        assert_eq!(dest.server, "survival-1");
+
+        let dest = server.resolve_lobby_destination("creative").unwrap();
+        assert_eq!(dest.server, "creative-1");
+    }
+
+    #[test]
+    fn unknown_destination_returns_error() {
+        let server = server_with_destinations(vec![LobbyDestination::new(
+            "survival",
+            "Survival",
+            "survival-1",
+        )]);
+
+        assert!(matches!(
+            server.resolve_lobby_destination("minigames"),
+            Err(NavigationError::UnknownDestination(id)) if id == "minigames"
+        ));
+    }
+
+    #[test]
+    fn empty_server_name_rejected_at_build_time() {
+        let mut builder = ServerState::builder();
+        let result = builder.set_lobby_destinations(vec![LobbyDestination::new(
+            "survival",
+            "Survival",
+            "",
+        )]);
+        assert!(matches!(
+            result,
+            Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"
+        ));
     }
 }

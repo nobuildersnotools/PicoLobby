@@ -7,6 +7,7 @@ pub struct CommandsConfig {
     pub fly: String,
     pub fly_speed: String,
     pub transfer: String,
+    pub server: String,
 }
 
 impl Default for CommandsConfig {
@@ -16,6 +17,7 @@ impl Default for CommandsConfig {
             fly: "fly".to_string(),
             fly_speed: "flyspeed".to_string(),
             transfer: "transfer".to_string(),
+            server: "server".to_string(),
         }
     }
 }

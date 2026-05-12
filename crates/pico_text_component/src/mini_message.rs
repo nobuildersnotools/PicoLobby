@@ -69,18 +69,17 @@ fn push_text(flat_components: &mut Vec<Component>, text: &str, style: &Style) {
     if text.is_empty() {
         return;
     }
-    if let Some(last) = flat_components.last_mut() {
-        if last.color == style.color
-            && last.bold == style.bold
-            && last.italic == style.italic
-            && last.underlined == style.underlined
-            && last.strikethrough == style.strikethrough
-            && last.obfuscated == style.obfuscated
-            && last.extra.is_empty()
-        {
-            last.text.push_str(text);
-            return;
-        }
+    if let Some(last) = flat_components.last_mut()
+        && last.color == style.color
+        && last.bold == style.bold
+        && last.italic == style.italic
+        && last.underlined == style.underlined
+        && last.strikethrough == style.strikethrough
+        && last.obfuscated == style.obfuscated
+        && last.extra.is_empty()
+    {
+        last.text.push_str(text);
+        return;
     }
     flat_components.push(Component {
         text: text.to_string(),
