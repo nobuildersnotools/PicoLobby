@@ -343,7 +343,7 @@ fn encode_v1_8_sections(
     let mut sky_lights = Vec::with_capacity(sections.len());
 
     for section in sections {
-        for state in legacy_block_states(section, &legacy_mapping) {
+        for state in legacy_block_states(section, legacy_mapping) {
             write_v1_8_block_state(writer, state)?;
         }
         block_lights.push(vec![0x00; 2048]);
@@ -373,7 +373,7 @@ fn encode_pre_flattening_section(
 
     let mut block_ids = Vec::with_capacity(4096);
     let mut metas = Vec::with_capacity(4096);
-    for state in legacy_block_states(section, &legacy_mapping) {
+    for state in legacy_block_states(section, legacy_mapping) {
         block_ids.push((state >> 4) as u8);
         metas.push((state & 0xF) as u8);
     }

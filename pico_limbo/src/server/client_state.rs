@@ -1,7 +1,10 @@
 use crate::server::game_profile::GameProfile;
-use crate::server_state::{LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId};
+use crate::server_state::{
+    ChatVisibility, LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId,
+};
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
+use std::time::{Duration, Instant};
 use tracing::info;
 
 #[derive(PartialEq, Eq)]
@@ -22,6 +25,9 @@ impl Default for ClientState {
             keep_alive_enabled: KeepAliveStatus::Disabled,
             entity_id: 0,
             lobby_session_id: None,
+            chat_visibility: ChatVisibility::Unknown,
+            pending_lobby_chat_plan: None,
+            last_chat_message_at: None,
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
             position: (0.0, 0.0, 0.0),
@@ -42,6 +48,9 @@ pub struct ClientState {
     keep_alive_enabled: KeepAliveStatus,
     entity_id: i32,
     lobby_session_id: Option<LobbySessionId>,
+    chat_visibility: ChatVisibility,
+    pending_lobby_chat_plan: Option<LobbyChatPlan>,
+    last_chat_message_at: Option<Instant>,
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
     position: (f64, f64, f64),
@@ -155,6 +164,33 @@ impl ClientState {
 
     pub const fn clear_lobby_session_id(&mut self) {
         self.lobby_session_id = None;
+    }
+
+    pub const fn chat_visibility(&self) -> ChatVisibility {
+        self.chat_visibility
+    }
+
+    pub const fn set_chat_visibility(&mut self, chat_visibility: ChatVisibility) {
+        self.chat_visibility = chat_visibility;
+    }
+
+    pub fn set_pending_chat_plan(&mut self, plan: LobbyChatPlan) {
+        self.pending_lobby_chat_plan = Some(plan);
+    }
+
+    pub const fn take_pending_chat_plan(&mut self) -> Option<LobbyChatPlan> {
+        self.pending_lobby_chat_plan.take()
+    }
+
+    pub fn check_chat_rate_limit(&mut self, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_chat_message_at
+            && now.duration_since(last) < min_interval
+        {
+            return false;
+        }
+        self.last_chat_message_at = Some(now);
+        true
     }
 
     pub fn set_pending_metadata_plan(&mut self, plan: LobbyMetadataPlan) {

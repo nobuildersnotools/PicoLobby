@@ -1,3 +1,4 @@
+mod client_information;
 mod configuration;
 mod handshake;
 mod login;

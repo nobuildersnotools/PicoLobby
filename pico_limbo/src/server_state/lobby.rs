@@ -61,6 +61,30 @@ pub enum LobbySessionLifecycle {
     Joined,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum ChatVisibility {
+    Full,
+    CommandsOnly,
+    Hidden,
+    #[default]
+    Unknown,
+}
+
+impl ChatVisibility {
+    pub const fn from_client_mode(mode: i32) -> Self {
+        match mode {
+            0 => Self::Full,
+            1 => Self::CommandsOnly,
+            2 => Self::Hidden,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub const fn receives_normal_chat(self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
+}
+
 #[derive(Clone)]
 pub struct LobbySession {
     pub session_id: LobbySessionId,
@@ -71,6 +95,7 @@ pub struct LobbySession {
     pub entity_id: EntityId,
     pub position: LobbyPosition,
     pub crouching: bool,
+    pub chat_visibility: ChatVisibility,
     #[allow(dead_code)]
     pub lifecycle: LobbySessionLifecycle,
 }
@@ -92,6 +117,7 @@ impl LobbySession {
             entity_id: EntityId::new(0),
             position,
             crouching: false,
+            chat_visibility: ChatVisibility::Unknown,
             lifecycle: LobbySessionLifecycle::Joined,
         }
     }
@@ -136,6 +162,15 @@ pub struct LobbyJoinPlan {
     pub new_session: LobbySession,
     pub existing_sessions: Vec<LobbySession>,
     pub existing_recipients: Vec<LobbyRecipient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyChatPlan {
+    pub sender_session_id: LobbySessionId,
+    pub sender_username: String,
+    pub message: String,
+    pub format: String,
+    pub recipients: Vec<LobbyRecipient>,
 }
 
 pub struct LobbyState {
@@ -283,6 +318,39 @@ impl LobbyState {
         })
     }
 
+    pub fn update_chat_visibility(
+        &mut self,
+        session_id: LobbySessionId,
+        chat_visibility: ChatVisibility,
+    ) -> bool {
+        let Some(uuid) = self.session_to_uuid.get(&session_id) else {
+            return false;
+        };
+        let Some(session) = self.sessions_by_uuid.get_mut(uuid) else {
+            return false;
+        };
+        session.chat_visibility = chat_visibility;
+        true
+    }
+
+    pub fn plan_chat_broadcast(
+        &self,
+        sender_session_id: LobbySessionId,
+        message: impl Into<String>,
+    ) -> Option<LobbyChatPlan> {
+        let sender_uuid = self.session_to_uuid.get(&sender_session_id)?;
+        let sender = self.sessions_by_uuid.get(sender_uuid)?;
+        let recipients = self.plan_chat_recipients();
+
+        Some(LobbyChatPlan {
+            sender_session_id,
+            sender_username: sender.username.clone(),
+            message: message.into(),
+            format: String::new(),
+            recipients,
+        })
+    }
+
     pub fn len(&self) -> usize {
         self.sessions_by_uuid.len()
     }
@@ -301,6 +369,22 @@ impl LobbyState {
             .sessions_by_uuid
             .values()
             .filter(|session| Some(session.session_id) != exclude_session_id)
+            .map(|session| LobbyRecipient {
+                session_id: session.session_id,
+                uuid: session.uuid,
+                entity_id: session.entity_id,
+                protocol_version: session.protocol_version,
+            })
+            .collect::<Vec<_>>();
+        recipients.sort_by_key(|recipient| recipient.session_id);
+        recipients
+    }
+
+    fn plan_chat_recipients(&self) -> Vec<LobbyRecipient> {
+        let mut recipients = self
+            .sessions_by_uuid
+            .values()
+            .filter(|session| session.chat_visibility.receives_normal_chat())
             .map(|session| LobbyRecipient {
                 session_id: session.session_id,
                 uuid: session.uuid,
@@ -541,6 +625,70 @@ mod tests {
                 entity_id: second.entity_id,
                 protocol_version: ProtocolVersion::V1_20_5,
             }]
+        );
+    }
+
+    #[test]
+    fn chat_plan_includes_sender_and_all_default_visibility_players() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "sender"));
+        let recipient = state.insert(session(Uuid::from_u128(2), "recipient"));
+
+        let plan = state
+            .plan_chat_broadcast(sender.session_id, "hello")
+            .expect("chat plan");
+
+        let ids: Vec<_> = plan.recipients.iter().map(|r| r.session_id).collect();
+        assert!(ids.contains(&sender.session_id));
+        assert!(ids.contains(&recipient.session_id));
+    }
+
+    #[test]
+    fn chat_visibility_modes_decode_from_client_modes() {
+        assert_eq!(ChatVisibility::from_client_mode(0), ChatVisibility::Full);
+        assert_eq!(
+            ChatVisibility::from_client_mode(1),
+            ChatVisibility::CommandsOnly
+        );
+        assert_eq!(ChatVisibility::from_client_mode(2), ChatVisibility::Hidden);
+        assert_eq!(
+            ChatVisibility::from_client_mode(99),
+            ChatVisibility::Unknown
+        );
+    }
+
+    #[test]
+    fn chat_plan_filters_hidden_recipients_but_keeps_unknown() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "sender"));
+        let visible = state.insert(session(Uuid::from_u128(2), "visible"));
+        let hidden = state.insert(session(Uuid::from_u128(3), "hidden"));
+
+        state.update_chat_visibility(visible.session_id, ChatVisibility::Full);
+        state.update_chat_visibility(hidden.session_id, ChatVisibility::Hidden);
+
+        let plan = state
+            .plan_chat_broadcast(sender.session_id, "hello")
+            .expect("chat plan");
+
+        assert_eq!(plan.sender_session_id, sender.session_id);
+        assert_eq!(plan.sender_username, "sender");
+        assert_eq!(plan.message, "hello");
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == sender.session_id)
+        );
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == visible.session_id)
+        );
+        assert!(
+            !plan
+                .recipients
+                .iter()
+                .any(|r| r.session_id == hidden.session_id)
         );
     }
 

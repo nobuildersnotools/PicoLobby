@@ -114,6 +114,7 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .action_bar(&cfg.action_bar)?
         .max_players(cfg.server_list.max_players)
         .set_lobby_enabled(cfg.lobby.enabled)
+        .set_lobby_chat_format(cfg.lobby.chat_format)
         .show_online_player_count(cfg.server_list.show_online_player_count)
         .game_mode(cfg.default_game_mode.into())
         .hardcore(cfg.hardcore)

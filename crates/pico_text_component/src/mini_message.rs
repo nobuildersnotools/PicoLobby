@@ -54,6 +54,46 @@ fn is_styling_tag(tag: &str) -> bool {
     )
 }
 
+fn expand_entity(name: &str) -> Option<&'static str> {
+    match name {
+        "lt" => Some("<"),
+        "gt" => Some(">"),
+        "amp" => Some("&"),
+        "apos" => Some("'"),
+        "quot" => Some("\""),
+        _ => None,
+    }
+}
+
+fn push_text(flat_components: &mut Vec<Component>, text: &str, style: &Style) {
+    if text.is_empty() {
+        return;
+    }
+    if let Some(last) = flat_components.last_mut() {
+        if last.color == style.color
+            && last.bold == style.bold
+            && last.italic == style.italic
+            && last.underlined == style.underlined
+            && last.strikethrough == style.strikethrough
+            && last.obfuscated == style.obfuscated
+            && last.extra.is_empty()
+        {
+            last.text.push_str(text);
+            return;
+        }
+    }
+    flat_components.push(Component {
+        text: text.to_string(),
+        color: style.color.clone(),
+        bold: style.bold,
+        italic: style.italic,
+        underlined: style.underlined,
+        strikethrough: style.strikethrough,
+        obfuscated: style.obfuscated,
+        extra: vec![],
+    });
+}
+
 pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
     let wrapped_input = format!("<root>{input}</root>");
     let mut reader = Reader::from_str(&wrapped_input);
@@ -69,16 +109,7 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
 
                 if tag_name == "newline" {
                     if let Some(current_style) = style_stack.last() {
-                        flat_components.push(Component {
-                            text: "\n".to_string(),
-                            color: current_style.color.clone(),
-                            bold: current_style.bold,
-                            italic: current_style.italic,
-                            underlined: current_style.underlined,
-                            strikethrough: current_style.strikethrough,
-                            obfuscated: current_style.obfuscated,
-                            extra: vec![],
-                        });
+                        push_text(&mut flat_components, "\n", current_style);
                     }
                 } else if is_styling_tag(&tag_name) {
                     let mut new_style = style_stack.last().cloned().unwrap_or_default();
@@ -106,21 +137,16 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
             }
             Event::Text(e) => {
                 let text = e.decode()?.to_string();
-                if text.is_empty() {
-                    continue;
-                }
-
                 if let Some(current_style) = style_stack.last() {
-                    flat_components.push(Component {
-                        text, // No need for .to_string() here
-                        color: current_style.color.clone(),
-                        bold: current_style.bold,
-                        italic: current_style.italic,
-                        underlined: current_style.underlined,
-                        strikethrough: current_style.strikethrough,
-                        obfuscated: current_style.obfuscated,
-                        extra: vec![],
-                    });
+                    push_text(&mut flat_components, &text, current_style);
+                }
+            }
+            Event::GeneralRef(e) => {
+                let name = std::str::from_utf8(e.as_ref()).unwrap_or("");
+                if let (Some(ch), Some(current_style)) =
+                    (expand_entity(name), style_stack.last())
+                {
+                    push_text(&mut flat_components, ch, current_style);
                 }
             }
             Event::Empty(e) => {
@@ -128,16 +154,7 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
                 if tag_name == "newline"
                     && let Some(current_style) = style_stack.last()
                 {
-                    flat_components.push(Component {
-                        text: "\n".to_string(),
-                        color: current_style.color.clone(),
-                        bold: current_style.bold,
-                        italic: current_style.italic,
-                        underlined: current_style.underlined,
-                        strikethrough: current_style.strikethrough,
-                        obfuscated: current_style.obfuscated,
-                        extra: vec![],
-                    });
+                    push_text(&mut flat_components, "\n", current_style);
                 }
             }
             Event::Eof => break,
@@ -283,20 +300,10 @@ mod tests {
         let input = "First line.<newline>Second line.";
         let result = parse_mini_message(input).unwrap();
         let expected = Component {
-            extra: vec![
-                Component {
-                    text: "First line.".to_string(),
-                    ..Component::default()
-                },
-                Component {
-                    text: "\n".to_string(),
-                    ..Component::default()
-                },
-                Component {
-                    text: "Second line.".to_string(),
-                    ..Component::default()
-                },
-            ],
+            extra: vec![Component {
+                text: "First line.\nSecond line.".to_string(),
+                ..Component::default()
+            }],
             ..Component::default()
         };
         assert_eq!(result, expected);
@@ -307,25 +314,28 @@ mod tests {
         let input = "<green>Hello<newline/>world!</green>";
         let result = parse_mini_message(input).unwrap();
         let expected = Component {
-            extra: vec![
-                Component {
-                    text: "Hello".to_string(),
-                    color: Some("green".to_string()),
-                    ..Component::default()
-                },
-                Component {
-                    text: "\n".to_string(),
-                    color: Some("green".to_string()),
-                    ..Component::default()
-                },
-                Component {
-                    text: "world!".to_string(),
-                    color: Some("green".to_string()),
-                    ..Component::default()
-                },
-            ],
+            extra: vec![Component {
+                text: "Hello\nworld!".to_string(),
+                color: Some("green".to_string()),
+                ..Component::default()
+            }],
             ..Component::default()
         };
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn xml_entities_render_as_literal_characters() {
+        let result = parse_mini_message("<white>&lt;Steve&gt; hello</white>").unwrap();
+        assert_eq!(result.extra.len(), 1);
+        assert_eq!(result.extra[0].text, "<Steve> hello");
+        assert_eq!(result.extra[0].color, Some("white".to_string()));
+    }
+
+    #[test]
+    fn amp_entity_renders_as_ampersand() {
+        let result = parse_mini_message("<white>A &amp; B</white>").unwrap();
+        assert_eq!(result.extra.len(), 1);
+        assert_eq!(result.extra[0].text, "A & B");
     }
 }

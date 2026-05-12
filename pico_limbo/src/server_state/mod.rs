@@ -5,8 +5,8 @@ use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
 use base64::{Engine, alphabet, engine};
 pub use lobby::{
-    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPosition,
-    LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
+    ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
+    LobbyMovementPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
@@ -98,6 +98,7 @@ pub struct ServerState {
     welcome_message: Option<Component>,
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
+    lobby_chat_format: String,
     lobby_state: Arc<Mutex<LobbyState>>,
     show_online_player_count: bool,
     game_mode: GameMode,
@@ -296,6 +297,8 @@ impl ServerState {
             client_state.protocol_version(),
             LobbyPosition::new(x, y, z, yaw, pitch),
         );
+        let mut session = session;
+        session.chat_visibility = client_state.chat_visibility();
         let session = self.lobby_state().insert(session);
         client_state.set_entity_id(session.entity_id.get());
         client_state.set_lobby_session_id(session.session_id);
@@ -364,6 +367,35 @@ impl ServerState {
 
         self.lobby_state()
             .update_crouching_with_metadata_plan(EntityId::new(client_state.entity_id()), crouching)
+    }
+
+    pub fn update_lobby_chat_visibility(&self, client_state: &ClientState) -> bool {
+        if !self.lobby_enabled {
+            return false;
+        }
+
+        let Some(session_id) = client_state.lobby_session_id() else {
+            return false;
+        };
+
+        self.lobby_state()
+            .update_chat_visibility(session_id, client_state.chat_visibility())
+    }
+
+    pub fn plan_lobby_chat_broadcast(
+        &self,
+        client_state: &ClientState,
+        message: impl Into<String>,
+    ) -> Option<LobbyChatPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        let mut plan = self
+            .lobby_state()
+            .plan_chat_broadcast(client_state.lobby_session_id()?, message)?;
+        plan.format = self.lobby_chat_format.clone();
+        Some(plan)
     }
 
     pub fn plan_lobby_join(&self, session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
@@ -440,6 +472,7 @@ pub struct ServerStateBuilder {
     max_players: u32,
     welcome_message: String,
     lobby_enabled: bool,
+    lobby_chat_format: String,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -559,6 +592,11 @@ impl ServerStateBuilder {
 
     pub const fn set_lobby_enabled(&mut self, enabled: bool) -> &mut Self {
         self.lobby_enabled = enabled;
+        self
+    }
+
+    pub fn set_lobby_chat_format<S: Into<String>>(&mut self, format: S) -> &mut Self {
+        self.lobby_chat_format = format.into();
         self
     }
 
@@ -763,6 +801,7 @@ impl ServerStateBuilder {
             action_bar: self.action_bar,
             connected_clients: Arc::new(AtomicU32::new(0)),
             lobby_enabled: self.lobby_enabled,
+            lobby_chat_format: self.lobby_chat_format,
             lobby_state: Arc::new(Mutex::new(LobbyState::new())),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,

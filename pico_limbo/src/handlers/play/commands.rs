@@ -1,6 +1,7 @@
 use crate::handlers::play::set_player_position_and_rotation::teleport_player_to_spawn;
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
+use crate::server::lobby_chat::{MAX_CHAT_MESSAGE_CHARS, chat_feedback_packet};
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{ServerCommand, ServerCommands, ServerState};
@@ -9,8 +10,11 @@ use minecraft_packets::play::chat_message_packet::ChatMessagePacket;
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::transfer_packet::TransferPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, VarInt};
+use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
+
+const CHAT_RATE_LIMIT_INTERVAL: Duration = Duration::from_millis(750);
 
 impl PacketHandler for ChatCommandPacket {
     fn handle(
@@ -34,9 +38,33 @@ impl PacketHandler for ChatMessagePacket {
         if let Some(command) = self.get_command() {
             run_command(client_state, server_state, command, &mut batch);
         } else {
-            info!("<{}> {}", client_state.get_username(), self.get_message());
+            handle_chat_message(client_state, server_state, self.get_message(), &mut batch);
         }
         Ok(batch)
+    }
+}
+
+fn handle_chat_message(
+    client_state: &mut ClientState,
+    server_state: &ServerState,
+    message: &str,
+    batch: &mut Batch<PacketRegistry>,
+) {
+    if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        let version = client_state.protocol_version();
+        batch.queue(move || chat_feedback_packet(version, "Chat message is too long."));
+        return;
+    }
+
+    if !client_state.check_chat_rate_limit(CHAT_RATE_LIMIT_INTERVAL) {
+        let version = client_state.protocol_version();
+        batch.queue(move || chat_feedback_packet(version, "You are sending messages too quickly."));
+        return;
+    }
+
+    info!("<{}> {}", client_state.get_username(), message);
+    if let Some(plan) = server_state.plan_lobby_chat_broadcast(client_state, message.to_owned()) {
+        client_state.set_pending_chat_plan(plan);
     }
 }
 
@@ -160,5 +188,62 @@ impl Command {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::game_profile::GameProfile;
+    use minecraft_protocol::prelude::Uuid;
+
+    fn client() -> ClientState {
+        let mut c = ClientState::default();
+        c.set_protocol_version(ProtocolVersion::V1_20_5);
+        c.set_game_profile(GameProfile::new("TestPlayer", Uuid::from_u128(1), None));
+        c
+    }
+
+    fn server() -> ServerState {
+        let mut builder = ServerState::builder();
+        builder.set_lobby_enabled(true).show_online_player_count(true);
+        builder.build().unwrap()
+    }
+
+    #[test]
+    fn overlong_message_does_not_broadcast() {
+        let mut client = client();
+        let server = server();
+        let mut batch = Batch::new();
+        let long_message = "a".repeat(MAX_CHAT_MESSAGE_CHARS + 1);
+
+        handle_chat_message(&mut client, &server, &long_message, &mut batch);
+
+        assert!(client.take_pending_chat_plan().is_none());
+    }
+
+    #[test]
+    fn rate_limited_second_message_does_not_broadcast() {
+        let mut client = client();
+        let server = server();
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "first", &mut Batch::new());
+        client.take_pending_chat_plan();
+
+        handle_chat_message(&mut client, &server, "second", &mut Batch::new());
+
+        assert!(client.take_pending_chat_plan().is_none());
+    }
+
+    #[test]
+    fn command_does_not_broadcast_as_chat() {
+        let mut client = client();
+        let server = server();
+        server.register_lobby_session(&mut client);
+
+        run_command(&mut client, &server, "spawn", &mut Batch::new());
+
+        assert!(client.take_pending_chat_plan().is_none());
     }
 }

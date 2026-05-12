@@ -1,4 +1,5 @@
 use crate::server::client_data::ClientData;
+use crate::server::lobby_chat::chat_packets_for_plan;
 use crate::server::lobby_visibility::{
     join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
     leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
@@ -8,7 +9,9 @@ use crate::server::packet_registry::{
     PacketRegistry, PacketRegistryDecodeError, PacketRegistryEncodeError,
 };
 use crate::server::shutdown_signal::shutdown_signal;
-use crate::server_state::{LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId, ServerState};
+use crate::server_state::{
+    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId, ServerState,
+};
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
 use minecraft_packets::play::client_bound_keep_alive_packet::ClientBoundKeepAlivePacket;
@@ -206,6 +209,7 @@ async fn process_packet(
 
     let pending_metadata_plan = client_state.take_pending_metadata_plan();
     let pending_movement_plan = client_state.take_pending_movement_plan();
+    let pending_chat_plan = client_state.take_pending_chat_plan();
 
     if let Some(reason) = client_state.should_kick() {
         drop(client_state);
@@ -223,6 +227,10 @@ async fn process_packet(
 
     if let Some(plan) = pending_movement_plan {
         broadcast_movement(&plan, server_state).await;
+    }
+
+    if let Some(plan) = pending_chat_plan {
+        broadcast_chat(&plan, server_state).await;
     }
 
     if let Some(session_id) = join_session_id {
@@ -333,6 +341,32 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
                     let _ = sender.send(raw_packet);
                 }
             }
+        }
+    }
+}
+
+async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerState>>) {
+    let packets = chat_packets_for_plan(plan);
+    if packets.is_empty() {
+        return;
+    }
+
+    let recipients = packets
+        .iter()
+        .map(|(recipient, _)| recipient.clone())
+        .collect::<Vec<_>>();
+    let server_state_guard = server_state.read().await;
+    let senders: HashMap<_, _> = server_state_guard
+        .collect_lobby_broadcast_senders(&recipients)
+        .into_iter()
+        .collect();
+    drop(server_state_guard);
+
+    for (recipient, packet) in packets {
+        if let Some(sender) = senders.get(&recipient.session_id)
+            && let Ok(raw_packet) = packet.encode_packet(recipient.protocol_version)
+        {
+            let _ = sender.send(raw_packet);
         }
     }
 }
