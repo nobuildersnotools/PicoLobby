@@ -1,9 +1,11 @@
 use minecraft_protocol::prelude::{BinaryReader, BinaryReaderError, DecodePacket, ProtocolVersion};
+use std::sync::LazyLock;
 use thiserror::Error;
 
 pub use blocks_report_data::{
     block_state_builder::BlockStateLookup,
     internal_mapping::{InternalId, InternalMapping, StateData},
+    legacy_mapping::{LegacyBlockMapping, LegacyEntry},
     report_mapping::{BlocksReportId, ReportIdMapping},
 };
 
@@ -11,6 +13,19 @@ include!(concat!(env!("OUT_DIR"), "/get_blocks_reports.rs"));
 include!(concat!(env!("OUT_DIR"), "/block_entity_lookup.rs"));
 
 static INTERNAL_MAPPING_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/internal_mapping"));
+static LEGACY_BLOCK_MAPPING_DATA: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/legacy_block_mapping"));
+
+static LEGACY_BLOCK_MAPPING: LazyLock<Vec<LegacyEntry>> = LazyLock::new(|| {
+    let mut reader = BinaryReader::new(LEGACY_BLOCK_MAPPING_DATA);
+    LegacyBlockMapping::decode(&mut reader, ProtocolVersion::latest())
+        .map(|m| m.into_inner())
+        .unwrap_or_default()
+});
+
+pub fn get_legacy_block_mapping() -> &'static [LegacyEntry] {
+    &LEGACY_BLOCK_MAPPING
+}
 
 #[derive(Debug, Error)]
 pub enum BlockReportIdMappingError {

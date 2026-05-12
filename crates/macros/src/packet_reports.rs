@@ -290,14 +290,10 @@ fn generate_encode_impl(
                     .and_then(|directions| directions.get("clientbound"))
                     .and_then(|packets| packets.get(packet_name));
 
-                if let Some(id) = packet_info
+                packet_info
                     .map(|packet_info| packet_info.protocol_id)
                     .or_else(|| clientbound_packet_id_override(version_number, packet_name))
-                {
-                    Some(quote! { #version_number => #id, })
-                } else {
-                    None
-                }
+                    .map(|id| quote! { #version_number => #id, })
             });
 
             quote! {

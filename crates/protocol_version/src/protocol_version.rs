@@ -82,6 +82,7 @@ pub enum ProtocolVersion {
 
     V1_10 = 210,
 
+    #[pvn(packets = V1_10)]
     V1_9_3 = 110,
     #[pvn(packets = V1_9)]
     V1_9_2 = 109,
@@ -169,6 +170,7 @@ mod tests {
 
         assert_eq!(v1_7_6.packets(), v1_7_2);
         assert_eq!(v1_7_2.packets(), v1_7_2);
+        assert_eq!(ProtocolVersion::V1_9_3.packets(), ProtocolVersion::V1_10);
     }
 
     #[test]

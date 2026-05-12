@@ -809,6 +809,28 @@ mod tests {
     }
 
     #[test]
+    fn encodes_v1_9_3_with_post_v1_9_2_packet_ids() {
+        let chunk_packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+            chunk_x: 0,
+            chunk_z: 0,
+            biome_index: 1,
+            dimension_height: 256,
+            dimension_min_y: 0,
+        });
+        let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(chunk_packet))
+            .encode_packet(ProtocolVersion::V1_9_3)
+            .unwrap();
+        assert_eq!(raw_packet.packet_id(), Some(32));
+
+        let teleport_packet = PacketRegistry::TeleportEntity(TeleportEntityPacket::absolute(
+            300, 8.1, 64.0, -2.25, 90.0, 45.0, true,
+        ))
+        .encode_packet(ProtocolVersion::V1_9_3)
+        .unwrap();
+        assert_eq!(teleport_packet.packet_id(), Some(73));
+    }
+
+    #[test]
     fn encodes_current_and_latest_head_rotation_packets() {
         let raw_packet = PacketRegistry::RotateHead(RotateHeadPacket::new(300, 90.0))
             .encode_packet(ProtocolVersion::V1_21)
@@ -922,6 +944,7 @@ mod tests {
         assert_eq!(&data[0..11], &[0, 0, 0, 0, 0, 0, 0, 0, 1, 0xFF, 0xFF]);
 
         let mut reader = BinaryReader::new(&data[11..]);
+        #[allow(clippy::cast_sign_loss)]
         let payload_len = VarInt::decode(&mut reader, ProtocolVersion::V1_8)
             .unwrap()
             .inner() as usize;
@@ -930,9 +953,46 @@ mod tests {
     }
 
     #[test]
-    fn v1_9_to_v1_12_chunk_payload_has_no_trailing_block_entity_count() {
+    fn v1_9_chunk_payload_has_no_trailing_block_entity_count() {
+        // 1.9.0–1.9.2 (protocols 107–109) do not include block entities in the chunk packet;
+        // block entities were added at protocol 110 (1.9.4).
         for protocol_version in [
             ProtocolVersion::V1_9,
+            ProtocolVersion::V1_9_1,
+            ProtocolVersion::V1_9_2,
+        ] {
+            let packet = ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+                chunk_x: 0,
+                chunk_z: 0,
+                biome_index: 1,
+                dimension_height: 256,
+                dimension_min_y: 0,
+            });
+            let raw_packet = PacketRegistry::ChunkDataAndUpdateLight(Box::new(packet))
+                .encode_packet(protocol_version)
+                .unwrap();
+            let data = raw_packet.data();
+
+            let mut reader = BinaryReader::new(&data[9..]);
+            VarInt::decode(&mut reader, protocol_version).unwrap();
+            #[allow(clippy::cast_sign_loss)]
+            let payload_len = VarInt::decode(&mut reader, protocol_version)
+                .unwrap()
+                .inner() as usize;
+
+            assert_eq!(
+                payload_len,
+                reader.remaining(),
+                "unexpected trailing bytes for {protocol_version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_10_to_v1_12_chunk_payload_has_trailing_block_entity_count() {
+        // 1.9.4–1.12.2 (protocols 110–340) include a VarInt block entity count after chunk data
+        for protocol_version in [
+            ProtocolVersion::V1_9_3,
             ProtocolVersion::V1_10,
             ProtocolVersion::V1_11,
             ProtocolVersion::V1_12_2,
@@ -951,14 +1011,15 @@ mod tests {
 
             let mut reader = BinaryReader::new(&data[9..]);
             VarInt::decode(&mut reader, protocol_version).unwrap();
+            #[allow(clippy::cast_sign_loss)]
             let payload_len = VarInt::decode(&mut reader, protocol_version)
                 .unwrap()
                 .inner() as usize;
 
             assert_eq!(
-                payload_len,
+                payload_len + 1,
                 reader.remaining(),
-                "unexpected trailing bytes for {protocol_version:?}"
+                "expected 1 trailing block-entity-count byte for {protocol_version:?}"
             );
         }
     }
@@ -979,6 +1040,7 @@ mod tests {
 
         let mut reader = BinaryReader::new(&data[9..]);
         VarInt::decode(&mut reader, ProtocolVersion::V1_13).unwrap();
+        #[allow(clippy::cast_sign_loss)]
         let payload_len = VarInt::decode(&mut reader, ProtocolVersion::V1_13)
             .unwrap()
             .inner() as usize;

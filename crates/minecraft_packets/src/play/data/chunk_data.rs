@@ -2,7 +2,9 @@ use crate::play::data::chunk_context::{VoidChunkContext, WorldContext};
 use crate::play::data::chunk_section::ChunkSection;
 use crate::play::data::encode_as_bytes::EncodeAsBytes;
 use crate::play::data::palette_container::PaletteContainer;
-use blocks_report::{BlockEntityTypeLookup, get_block_entity_lookup};
+use blocks_report::{
+    BlockEntityTypeLookup, LegacyEntry, get_block_entity_lookup, get_legacy_block_mapping,
+};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use minecraft_protocol::prelude::*;
@@ -228,8 +230,12 @@ impl ChunkData {
         }
 
         let mut payload_writer = BinaryWriter::default();
-        for section in self.data.inner() {
-            encode_pre_v1_16_section(section, &mut payload_writer, protocol_version)?;
+        if protocol_version == ProtocolVersion::V1_8 {
+            encode_v1_8_sections(self.data.inner(), &mut payload_writer)?;
+        } else {
+            for section in self.data.inner() {
+                encode_pre_v1_16_section(section, &mut payload_writer, protocol_version)?;
+            }
         }
 
         if protocol_version.between_inclusive(ProtocolVersion::V1_14, ProtocolVersion::V1_14_4) {
@@ -252,7 +258,7 @@ impl ChunkData {
             writer.write_bytes(payload_writer.as_slice())?;
         }
 
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_13) {
+        if protocol_version.is_after_inclusive(ProtocolVersion::V1_9_3) {
             self.block_entities.encode(writer, protocol_version)?;
         }
 
@@ -265,10 +271,18 @@ fn encode_pre_v1_16_section(
     writer: &mut BinaryWriter,
     protocol_version: ProtocolVersion,
 ) -> Result<(), BinaryWriterError> {
+    if protocol_version == ProtocolVersion::V1_8 {
+        encode_v1_8_sections(std::slice::from_ref(section), writer)?;
+        return Ok(());
+    }
+
+    if protocol_version.is_before_inclusive(ProtocolVersion::V1_7_6) {
+        encode_pre_flattening_section(section, writer)?;
+        return Ok(());
+    }
+
     if protocol_version.is_before_inclusive(ProtocolVersion::V1_12_2) {
-        // The repo does not yet ship pre-flattening blockstate mappings. Send valid
-        // air sections instead of modern flattened IDs that old clients cannot decode.
-        encode_pre_flattening_section(writer)?;
+        encode_v1_9_to_v1_12_section(section, writer, protocol_version)?;
         return Ok(());
     }
 
@@ -320,12 +334,135 @@ fn encode_flattened_section_blocks(
     Ok(())
 }
 
-fn encode_pre_flattening_section(writer: &mut BinaryWriter) -> Result<(), BinaryWriterError> {
-    writer.write_bytes(&vec![0; 4096])?;
-    writer.write_bytes(&vec![0; 2048])?;
-    writer.write_bytes(&vec![0; 2048])?;
+fn encode_v1_8_sections(
+    sections: &[ChunkSection],
+    writer: &mut BinaryWriter,
+) -> Result<(), BinaryWriterError> {
+    let legacy_mapping = get_legacy_block_mapping();
+    let mut block_lights = Vec::with_capacity(sections.len());
+    let mut sky_lights = Vec::with_capacity(sections.len());
+
+    for section in sections {
+        for state in legacy_block_states(section, &legacy_mapping) {
+            write_v1_8_block_state(writer, state)?;
+        }
+        block_lights.push(vec![0x00; 2048]);
+        sky_lights.push(vec![0xFF; 2048]);
+    }
+
+    for light in block_lights {
+        writer.write_bytes(&light)?;
+    }
+    for light in sky_lights {
+        writer.write_bytes(&light)?;
+    }
+
+    Ok(())
+}
+
+fn write_v1_8_block_state(writer: &mut BinaryWriter, state: u16) -> Result<(), BinaryWriterError> {
+    writer.write_bytes(&state.to_le_bytes())?;
+    Ok(())
+}
+
+fn encode_pre_flattening_section(
+    section: &ChunkSection,
+    writer: &mut BinaryWriter,
+) -> Result<(), BinaryWriterError> {
+    let legacy_mapping = get_legacy_block_mapping();
+
+    let mut block_ids = Vec::with_capacity(4096);
+    let mut metas = Vec::with_capacity(4096);
+    for state in legacy_block_states(section, &legacy_mapping) {
+        block_ids.push((state >> 4) as u8);
+        metas.push((state & 0xF) as u8);
+    }
+
+    writer.write_bytes(&block_ids)?;
+    writer.write_bytes(&pack_nibbles(&metas))?;
+    writer.write_bytes(&vec![0x00; 2048])?;
     writer.write_bytes(&vec![0xFF; 2048])?;
     Ok(())
+}
+
+fn encode_v1_9_to_v1_12_section(
+    section: &ChunkSection,
+    writer: &mut BinaryWriter,
+    protocol_version: ProtocolVersion,
+) -> Result<(), BinaryWriterError> {
+    let legacy_mapping = get_legacy_block_mapping();
+    let v1_16_ids = section_block_ids(section);
+
+    // Map V1_16 state IDs → pre-flattening state IDs: (block_id << 4) | metadata
+    let legacy_ids: Vec<u32> = v1_16_ids
+        .iter()
+        .map(|&sid| {
+            let entry = legacy_mapping
+                .get(sid as usize)
+                .copied()
+                .unwrap_or(LegacyEntry::NO_MAPPING);
+            if entry.has_mapping() {
+                (u32::from(entry.block_id) << 4) | u32::from(entry.metadata)
+            } else {
+                0
+            }
+        })
+        .collect();
+
+    let mut palette = Vec::<u32>::new();
+    let mut palette_indices = Vec::with_capacity(legacy_ids.len());
+    for &id in &legacy_ids {
+        let index = palette
+            .iter()
+            .position(|&entry| entry == id)
+            .unwrap_or_else(|| {
+                palette.push(id);
+                palette.len() - 1
+            });
+        palette_indices.push(index as u32);
+    }
+
+    let bits_per_block = bits_needed(palette.len()).clamp(4, 8) as u8;
+    bits_per_block.encode(writer, protocol_version)?;
+    VarInt::new(i32::try_from(palette.len())?).encode(writer, protocol_version)?;
+    for id in &palette {
+        VarInt::new(i32::try_from(*id)?).encode(writer, protocol_version)?;
+    }
+
+    let data = pack_compact(palette_indices.into_iter(), bits_per_block);
+    VarInt::new(i32::try_from(data.len())?).encode(writer, protocol_version)?;
+    for word in data {
+        word.encode(writer, protocol_version)?;
+    }
+
+    writer.write_bytes(&vec![0x00; 2048])?;
+    writer.write_bytes(&vec![0xFF; 2048])?;
+
+    Ok(())
+}
+
+fn legacy_block_states(section: &ChunkSection, legacy_mapping: &[LegacyEntry]) -> Vec<u16> {
+    section_block_ids(section)
+        .into_iter()
+        .map(|sid| {
+            let entry = legacy_mapping
+                .get(sid as usize)
+                .copied()
+                .unwrap_or(LegacyEntry::NO_MAPPING);
+            if entry.has_mapping() {
+                (u16::from(entry.block_id) << 4) | u16::from(entry.metadata)
+            } else {
+                0
+            }
+        })
+        .collect()
+}
+
+fn pack_nibbles(values: &[u8]) -> Vec<u8> {
+    values
+        .chunks(2)
+        .map(|pair| (pair[0] & 0xF) | (pair.get(1).copied().unwrap_or(0) << 4))
+        .collect()
 }
 
 fn section_block_ids(section: &ChunkSection) -> Vec<u32> {
@@ -471,6 +608,160 @@ mod tests {
             &bytes[payload_offset + (16 * 2055)..payload_offset + (16 * 2055) + 4],
             &[0, 0, 0, 1]
         );
+    }
+
+    #[test]
+    fn v1_12_void_section_encodes_to_palette_format() {
+        let section = ChunkSection::void(1);
+        let mut writer = BinaryWriter::default();
+
+        encode_pre_v1_16_section(&section, &mut writer, ProtocolVersion::V1_12_2).unwrap();
+
+        let bytes = writer.into_inner();
+        // 1.9–1.12 uses palette format: bpe(1) + palette_len(1) + air_entry(1) +
+        // data_len(2) + 256 longs(2048) + block_light(2048) + sky_light(2048) = 6149
+        assert_eq!(
+            bytes.len(),
+            6149,
+            "1.9–1.12 section must use palette format"
+        );
+        // bits_per_entry = 4
+        assert_eq!(bytes[0], 4);
+        // palette: length=1, entry=0 (air)
+        assert_eq!(&bytes[1..3], &[0x01, 0x00]);
+        // data array length VarInt = 256 (0x80 0x02)
+        assert_eq!(&bytes[3..5], &[0x80, 0x02]);
+        // data = all zeros (all air)
+        assert!(
+            bytes[5..2053].iter().all(|&b| b == 0),
+            "block data must be zero for void"
+        );
+        // block light = all zeros
+        assert!(
+            bytes[2053..4101].iter().all(|&b| b == 0),
+            "block light must be dark"
+        );
+        // sky light = all 0xFF
+        assert!(
+            bytes[4101..].iter().all(|&b| b == 0xFF),
+            "sky light must be fully bright"
+        );
+    }
+
+    #[test]
+    fn v1_8_void_section_encodes_to_packed_state_format() {
+        let section = ChunkSection::void(1);
+        let mut writer = BinaryWriter::default();
+
+        encode_pre_v1_16_section(&section, &mut writer, ProtocolVersion::V1_8).unwrap();
+
+        let bytes = writer.into_inner();
+        assert_eq!(
+            bytes.len(),
+            12288,
+            "1.8 section data must use packed state entries plus block and sky light"
+        );
+        assert!(
+            bytes[..8192].iter().all(|&b| b == 0),
+            "void section: all packed block states must be air"
+        );
+        assert!(
+            bytes[8192..10240].iter().all(|&b| b == 0),
+            "void section: block light must be dark"
+        );
+        assert!(
+            bytes[10240..].iter().all(|&b| b == 0xFF),
+            "void section: sky light must be fully bright"
+        );
+    }
+
+    #[test]
+    fn v1_8_block_states_are_little_endian() {
+        let mut writer = BinaryWriter::default();
+
+        write_v1_8_block_state(&mut writer, 0x0123).unwrap();
+
+        assert_eq!(writer.into_inner(), [0x23, 0x01]);
+    }
+
+    #[test]
+    fn pre_v1_8_void_section_keeps_separate_id_and_metadata_arrays() {
+        let section = ChunkSection::void(1);
+        let mut writer = BinaryWriter::default();
+
+        encode_pre_v1_16_section(&section, &mut writer, ProtocolVersion::V1_7_6).unwrap();
+
+        let bytes = writer.into_inner();
+        assert_eq!(
+            bytes.len(),
+            10240,
+            "1.7 section data must use separate ID and metadata arrays"
+        );
+        assert!(
+            bytes[..4096].iter().all(|&b| b == 0),
+            "void section: all block IDs must be air"
+        );
+        assert!(
+            bytes[4096..6144].iter().all(|&b| b == 0),
+            "void section: all metadata must be zero"
+        );
+        assert!(
+            bytes[6144..8192].iter().all(|&b| b == 0),
+            "void section: block light must be dark"
+        );
+        assert!(
+            bytes[8192..].iter().all(|&b| b == 0xFF),
+            "void section: sky light must be fully bright"
+        );
+    }
+
+    #[test]
+    fn v1_8_full_chunk_payload_uses_packed_state_arrays_then_light() {
+        let chunk_data = ChunkData::void(VoidChunkContext {
+            chunk_x: 0,
+            chunk_z: 0,
+            biome_index: 1,
+            dimension_height: 256,
+            dimension_min_y: 0,
+        });
+        let mut writer = BinaryWriter::default();
+
+        chunk_data
+            .encode_pre_v1_16(&mut writer, ProtocolVersion::V1_8)
+            .unwrap();
+
+        let bytes = writer.into_inner();
+        let payload_len = (16 * 8192) + (16 * 2048) + (16 * 2048) + 256;
+        assert_eq!(&bytes[0..3], &[0x80, 0x82, 0x0C]);
+        assert_eq!(bytes.len(), 3 + payload_len);
+
+        let payload = &bytes[3..];
+        assert!(
+            payload[..16 * 8192].iter().all(|&byte| byte == 0),
+            "void 1.8 block state arrays must be air"
+        );
+        assert!(
+            payload[16 * 8192..(16 * 8192) + (16 * 2048)]
+                .iter()
+                .all(|&byte| byte == 0),
+            "void 1.8 block light arrays must be dark"
+        );
+        assert!(
+            payload[(16 * 8192) + (16 * 2048)..(16 * 8192) + (32 * 2048)]
+                .iter()
+                .all(|&byte| byte == 0xFF),
+            "void 1.8 sky light arrays must be fully bright"
+        );
+        assert_eq!(payload[payload_len - 256], 1);
+    }
+
+    #[test]
+    fn pack_nibbles_pairs_low_then_high() {
+        let values = vec![0x3u8, 0xAu8, 0x1u8, 0x5u8];
+        let nibbles = pack_nibbles(&values);
+        assert_eq!(nibbles.len(), 2);
+        assert_eq!(nibbles[0], 0x3 | (0xA << 4));
+        assert_eq!(nibbles[1], 0x1 | (0x5 << 4));
     }
 
     #[test]
