@@ -57,6 +57,10 @@ impl Component {
         .unwrap_or_default()
     }
 
+    pub fn to_legacy_text(&self) -> String {
+        self.to_legacy_impl(true)
+    }
+
     fn to_legacy_impl(&self, is_root: bool) -> String {
         let mut s = String::new();
 

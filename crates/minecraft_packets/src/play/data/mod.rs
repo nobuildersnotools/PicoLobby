@@ -7,3 +7,4 @@ mod encode_as_bytes;
 pub mod light_data;
 pub mod login_packet_data;
 pub mod palette_container;
+pub mod slot_data;

@@ -123,6 +123,11 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .set_lobby_enabled(cfg.lobby.enabled)
         .set_lobby_chat_format(cfg.lobby.chat_format)
         .set_lobby_destinations(lobby_destinations)?
+        .set_lobby_selector(if cfg.lobby.enabled {
+            cfg.lobby.selector
+        } else {
+            None
+        })?
         .show_online_player_count(cfg.server_list.show_online_player_count)
         .game_mode(cfg.default_game_mode.into())
         .hardcore(cfg.hardcore)

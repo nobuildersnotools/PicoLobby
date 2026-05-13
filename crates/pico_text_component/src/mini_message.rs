@@ -142,9 +142,7 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
             }
             Event::GeneralRef(e) => {
                 let name = std::str::from_utf8(e.as_ref()).unwrap_or("");
-                if let (Some(ch), Some(current_style)) =
-                    (expand_entity(name), style_stack.last())
-                {
+                if let (Some(ch), Some(current_style)) = (expand_entity(name), style_stack.last()) {
                     push_text(&mut flat_components, ch, current_style);
                 }
             }

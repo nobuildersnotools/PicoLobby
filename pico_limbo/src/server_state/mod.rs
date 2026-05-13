@@ -1,5 +1,6 @@
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
+use crate::configuration::lobby::SelectorItemConfig;
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
@@ -8,12 +9,13 @@ pub use lobby::{
     ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
     LobbyMovementPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
 };
-pub use navigation::{LobbyDestination, NavigationError};
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
+pub use navigation::{LobbyDestination, NavigationError};
 use net::raw_packet::RawPacket;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
+pub use selector::LobbySelector;
 pub use server_commands::{ServerCommand, ServerCommands};
 use std::fs::File;
 use std::io::Read;
@@ -28,6 +30,7 @@ use tracing::debug;
 
 mod lobby;
 mod navigation;
+mod selector;
 mod server_commands;
 
 #[derive(Clone)]
@@ -102,6 +105,7 @@ pub struct ServerState {
     lobby_enabled: bool,
     lobby_chat_format: String,
     lobby_destinations: Vec<LobbyDestination>,
+    lobby_selector: Option<LobbySelector>,
     lobby_state: Arc<Mutex<LobbyState>>,
     show_online_player_count: bool,
     game_mode: GameMode,
@@ -284,7 +288,14 @@ impl ServerState {
         self.lobby_enabled
     }
 
-    pub fn resolve_lobby_destination(&self, id: &str) -> Result<&LobbyDestination, NavigationError> {
+    pub const fn lobby_selector(&self) -> Option<&LobbySelector> {
+        self.lobby_selector.as_ref()
+    }
+
+    pub fn resolve_lobby_destination(
+        &self,
+        id: &str,
+    ) -> Result<&LobbyDestination, NavigationError> {
         self.lobby_destinations
             .iter()
             .find(|d| d.id.as_str() == id)
@@ -484,6 +495,7 @@ pub struct ServerStateBuilder {
     lobby_enabled: bool,
     lobby_chat_format: String,
     lobby_destinations: Vec<LobbyDestination>,
+    lobby_selector: Option<LobbySelector>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -520,7 +532,9 @@ pub enum ServerStateBuilderError {
     MiniMessage(#[from] MiniMessageError),
     #[error("the configured spawn position Y is below the configured minimum Y position")]
     InvalidSpawnPosition,
-    #[error("lobby server '{0}' has an empty 'server' name; every [[lobby.servers]] entry must specify a Velocity server name")]
+    #[error(
+        "lobby server '{0}' has an empty 'server' name; every [[lobby.servers]] entry must specify a Velocity server name"
+    )]
     EmptyServerName(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -611,6 +625,21 @@ impl ServerStateBuilder {
     pub fn set_lobby_chat_format<S: Into<String>>(&mut self, format: S) -> &mut Self {
         self.lobby_chat_format = format.into();
         self
+    }
+
+    /// Sets the hotbar selector item from config.  Parses `MiniMessage` strings
+    /// and pre-computes per-version item IDs.  Silently ignores `None`.
+    pub fn set_lobby_selector(
+        &mut self,
+        config: Option<SelectorItemConfig>,
+    ) -> Result<&mut Self, ServerStateBuilderError> {
+        if let Some(cfg) = config {
+            let slot = cfg.slot.min(8);
+            let selector =
+                LobbySelector::new(slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?;
+            self.lobby_selector = Some(selector);
+        }
+        Ok(self)
     }
 
     pub fn set_lobby_destinations(
@@ -831,6 +860,7 @@ impl ServerStateBuilder {
             lobby_enabled: self.lobby_enabled,
             lobby_chat_format: self.lobby_chat_format,
             lobby_destinations: self.lobby_destinations,
+            lobby_selector: self.lobby_selector,
             lobby_state: Arc::new(Mutex::new(LobbyState::new())),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
@@ -1040,11 +1070,8 @@ mod tests {
     #[test]
     fn empty_server_name_rejected_at_build_time() {
         let mut builder = ServerState::builder();
-        let result = builder.set_lobby_destinations(vec![LobbyDestination::new(
-            "survival",
-            "Survival",
-            "",
-        )]);
+        let result =
+            builder.set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "")]);
         assert!(matches!(
             result,
             Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"

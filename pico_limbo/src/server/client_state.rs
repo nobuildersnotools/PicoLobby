@@ -35,6 +35,7 @@ impl Default for ClientState {
             is_flight_allowed: false,
             is_flying: false,
             flying_speed: 0.05,
+            selected_hotbar_slot: 0,
         }
     }
 }
@@ -58,6 +59,7 @@ pub struct ClientState {
     is_flight_allowed: bool,
     is_flying: bool,
     flying_speed: f32,
+    selected_hotbar_slot: u8,
 }
 
 impl ClientState {
@@ -273,5 +275,13 @@ impl ClientState {
 
     pub const fn set_flying_speed(&mut self, flying_speed: f32) {
         self.flying_speed = flying_speed;
+    }
+
+    pub const fn selected_hotbar_slot(&self) -> u8 {
+        self.selected_hotbar_slot
+    }
+
+    pub const fn set_selected_hotbar_slot(&mut self, slot: u8) {
+        self.selected_hotbar_slot = slot;
     }
 }

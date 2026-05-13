@@ -237,7 +237,9 @@ mod tests {
 
     fn server() -> ServerState {
         let mut builder = ServerState::builder();
-        builder.set_lobby_enabled(true).show_online_player_count(true);
+        builder
+            .set_lobby_enabled(true)
+            .show_online_player_count(true);
         builder.build().unwrap()
     }
 

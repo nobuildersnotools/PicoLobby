@@ -1255,6 +1255,7 @@ dependencies = [
  "phf_codegen",
  "pico_registries",
  "protocol_version",
+ "serde_json",
 ]
 
 [[package]]

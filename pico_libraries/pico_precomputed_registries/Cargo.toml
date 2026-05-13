@@ -15,6 +15,7 @@ pico_registries = { path = "../pico_registries" }
 phf = { workspace = true }
 phf_codegen = { workspace = true }
 anyhow = { workspace = true }
+serde_json = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"

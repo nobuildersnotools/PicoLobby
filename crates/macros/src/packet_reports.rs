@@ -217,8 +217,11 @@ fn generate_decode_impl(
                     .and_then(|directions| directions.get("serverbound"))
                     .and_then(|packets| packets.get(packet_name));
 
-                if let Some(packet_info) = packet_info {
-                    let id = packet_info.protocol_id;
+                let id = packet_info
+                    .map(|packet_info| packet_info.protocol_id)
+                    .or_else(|| serverbound_packet_id_override(version_number, packet_name));
+
+                if let Some(id) = id {
                     let state_ident = format_ident!("{}", capitalize_first(state_str));
                     let packet_type = &variant_info.packet_type;
                     let variant_ident = &variant_info.variant_ident;
@@ -334,6 +337,44 @@ fn clientbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
     match (version_number, packet_name) {
         (477, "minecraft:light_update") => Some(36),
         (573, "minecraft:light_update") => Some(37),
+        (4 | 47, "minecraft:container_set_slot") => Some(0x2f),
+        (107 | 210 | 315 | 335 | 338, "minecraft:container_set_slot") => Some(0x16),
+        (393 | 573, "minecraft:container_set_slot") => Some(0x17),
+        (477 | 735 | 755 | 757, "minecraft:container_set_slot") => Some(0x16),
+        (751 | 764 | 765 | 766, "minecraft:container_set_slot") => Some(0x15),
+        (759 | 760, "minecraft:container_set_slot") => Some(0x13),
+        (761, "minecraft:container_set_slot") => Some(0x12),
+        (762 | 763, "minecraft:container_set_slot") => Some(0x14),
+        _ => None,
+    }
+}
+
+fn serverbound_packet_id_override(version_number: i32, packet_name: &str) -> Option<u8> {
+    match (version_number, packet_name) {
+        (4 | 47, "minecraft:set_carried_item") => Some(0x09),
+        (107 | 210 | 315, "minecraft:set_carried_item") => Some(0x17),
+        (335 | 338, "minecraft:set_carried_item") => Some(0x1a),
+        (393, "minecraft:set_carried_item") => Some(0x21),
+        (477 | 573, "minecraft:set_carried_item") => Some(0x23),
+        (735, "minecraft:set_carried_item") => Some(0x24),
+        (751 | 755 | 757, "minecraft:set_carried_item") => Some(0x25),
+        (759, "minecraft:set_carried_item") => Some(0x27),
+        (760 | 761 | 762 | 763, "minecraft:set_carried_item") => Some(0x28),
+        (764, "minecraft:set_carried_item") => Some(0x2b),
+        (765, "minecraft:set_carried_item") => Some(0x2c),
+        (766, "minecraft:set_carried_item") => Some(0x2f),
+        (107 | 210 | 315, "minecraft:use_item") => Some(0x1d),
+        (335 | 338, "minecraft:use_item") => Some(0x20),
+        (393, "minecraft:use_item") => Some(0x2a),
+        (477 | 573, "minecraft:use_item") => Some(0x2d),
+        (735, "minecraft:use_item") => Some(0x2e),
+        (751 | 755 | 757, "minecraft:use_item") => Some(0x2f),
+        (759, "minecraft:use_item") => Some(0x31),
+        (760 | 761 | 762 | 763, "minecraft:use_item") => Some(0x32),
+        (764, "minecraft:use_item") => Some(0x35),
+        (765, "minecraft:use_item") => Some(0x36),
+        (766, "minecraft:use_item") => Some(0x39),
+        (4 | 47, "minecraft:legacy_use_item") => Some(0x08),
         _ => None,
     }
 }

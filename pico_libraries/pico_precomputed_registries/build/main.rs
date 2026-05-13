@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
     build_dimension_info_map(&mut file)?;
     build_registry_data_map(&mut file, &mut blob_writer)?;
     build_tagged_registries_map(&mut file)?;
+    build_item_id_map(&mut file)?;
 
     Ok(())
 }
@@ -326,4 +327,82 @@ fn build_tagged_registries_map(w: &mut impl Write) -> anyhow::Result<()> {
 
 fn ver_key(v: ProtocolVersion) -> String {
     format!("{v:?}")
+}
+
+/// Returns the base path to `data/generated/`.
+fn generated_data_root() -> anyhow::Result<PathBuf> {
+    let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("Missing CARGO_MANIFEST_DIR"))?;
+    Ok(manifest_dir.join("../../data/generated"))
+}
+
+/// Reads `data/generated/{version}/reports/registries.json` and returns the
+/// `minecraft:item` entries as `(identifier_without_namespace, protocol_id)`.
+fn read_item_registry(
+    generated_root: &Path,
+    version: ProtocolVersion,
+) -> anyhow::Result<Vec<(String, i32)>> {
+    let path = generated_root
+        .join(format!("{version:?}"))
+        .join("reports/registries.json");
+
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let json: serde_json::Value = serde_json::from_str(&content)?;
+
+    let entries = json
+        .get("minecraft:item")
+        .and_then(|r| r.get("entries"))
+        .and_then(|e| e.as_object());
+
+    let Some(entries) = entries else {
+        return Ok(Vec::new());
+    };
+
+    let mut result = Vec::new();
+    for (identifier, data) in entries {
+        if let Some(id) = data.get("protocol_id").and_then(serde_json::Value::as_i64) {
+            #[allow(clippy::cast_possible_truncation)]
+            result.push((identifier.clone(), id as i32));
+        }
+    }
+    Ok(result)
+}
+
+/// Emits a flat `phf::Map` keyed by `"VersionKey|minecraft:identifier"` → `i32`.
+///
+/// Only versions that have their own `reports/registries.json` are included as
+/// source keys; callers map other versions to one of these buckets at runtime.
+fn build_item_id_map(w: &mut impl Write) -> anyhow::Result<()> {
+    let generated_root = generated_data_root()?;
+
+    // Collect all (key, value_string) pairs first so they outlive the map builder.
+    let mut all_entries: Vec<(String, String)> = Vec::new();
+    for version in ProtocolVersion::ALL_VERSION {
+        let items = read_item_registry(&generated_root, *version)?;
+        if items.is_empty() {
+            continue;
+        }
+        let vk = ver_key(*version);
+        for (identifier, protocol_id) in items {
+            all_entries.push((format!("{vk}|{identifier}"), protocol_id.to_string()));
+        }
+    }
+
+    let mut map = phf_codegen::Map::new();
+    let count = all_entries.len();
+    for (key, value_str) in &all_entries {
+        map.entry(key.as_str(), value_str.as_str());
+    }
+
+    writeln!(
+        w,
+        "// {count} item-version entries\npub static ITEM_IDS: phf::Map<&'static str, i32> = \n{};\n",
+        map.build()
+    )?;
+    Ok(())
 }

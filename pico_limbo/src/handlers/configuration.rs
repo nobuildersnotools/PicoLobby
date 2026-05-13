@@ -294,10 +294,30 @@ pub fn send_play_packets(
         batch.chain_iter(iter);
     }
 
+    send_selector_item_packet(batch, client_state, server_state);
+
     client_state.set_state(State::Play);
     client_state.set_keep_alive_should_enable();
 
     Ok(())
+}
+
+fn send_selector_item_packet(
+    batch: &mut Batch<PacketRegistry>,
+    client_state: &ClientState,
+    server_state: &ServerState,
+) {
+    if !server_state.lobby_enabled() {
+        return;
+    }
+    let Some(selector) = server_state.lobby_selector() else {
+        return;
+    };
+    let version = client_state.protocol_version();
+    let Some(packet) = selector.build_hotbar_packet(version) else {
+        return;
+    };
+    batch.queue(|| PacketRegistry::SetContainerSlot(packet));
 }
 
 fn send_tab_list_packets(batch: &mut Batch<PacketRegistry>, server_state: &ServerState) {
@@ -803,5 +823,57 @@ mod tests {
             PacketRegistry::ChunkDataAndUpdateLight(_)
         ));
         assert!(batch.next().await.is_none());
+    }
+
+    fn lobby_server_state_with_selector() -> ServerState {
+        use crate::configuration::lobby::SelectorItemConfig;
+        let mut builder = ServerState::builder();
+        builder
+            .view_distance(0)
+            .set_lobby_enabled(true)
+            .show_online_player_count(true)
+            .set_lobby_selector(Some(SelectorItemConfig {
+                slot: 4,
+                item: "minecraft:compass".to_string(),
+                display_name: Some("<bold>Selector".to_string()),
+                lore: vec!["<gray>Right-click".to_string()],
+            }))
+            .unwrap();
+        builder.build().unwrap()
+    }
+
+    #[tokio::test]
+    async fn selector_item_is_sent_after_chunks_when_lobby_enabled() {
+        let server_state = lobby_server_state_with_selector();
+        let mut client_state =
+            lobby_client(ProtocolVersion::V1_20_5, "TestPlayer", Uuid::from_u128(1));
+        let mut batch = Batch::new();
+
+        send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
+
+        let all_packets: Vec<_> = batch.into_stream().collect().await;
+        let has_slot = all_packets
+            .iter()
+            .any(|p| matches!(p, PacketRegistry::SetContainerSlot(_)));
+        assert!(has_slot, "expected SetContainerSlot in play join packets");
+    }
+
+    #[tokio::test]
+    async fn selector_item_not_sent_when_no_selector_configured() {
+        let server_state = lobby_server_state(); // no selector
+        let mut client_state =
+            lobby_client(ProtocolVersion::V1_20_5, "TestPlayer", Uuid::from_u128(1));
+        let mut batch = Batch::new();
+
+        send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
+
+        let all_packets: Vec<_> = batch.into_stream().collect().await;
+        let has_slot = all_packets
+            .iter()
+            .any(|p| matches!(p, PacketRegistry::SetContainerSlot(_)));
+        assert!(
+            !has_slot,
+            "SetContainerSlot should not appear without selector config"
+        );
     }
 }

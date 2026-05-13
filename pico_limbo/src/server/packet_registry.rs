@@ -33,6 +33,7 @@ use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_packets::play::game_event_packet::GameEventPacket;
 use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket;
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
+use minecraft_packets::play::legacy_use_item_packet::LegacyUseItemPacket;
 use minecraft_packets::play::light_update_packet::LightUpdatePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::move_entity_packet::{
@@ -45,9 +46,11 @@ use minecraft_packets::play::player_input_packet::PlayerInputPacket;
 use minecraft_packets::play::remove_entities_packet::RemoveEntitiesPacket;
 use minecraft_packets::play::rotate_head_packet::RotateHeadPacket;
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
+use minecraft_packets::play::server_bound_set_held_item_packet::ServerBoundSetHeldItemPacket;
 use minecraft_packets::play::server_data_packet::ServerDataPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
+use minecraft_packets::play::set_container_slot_packet::SetContainerSlotPacket;
 use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnPositionPacket;
 use minecraft_packets::play::set_entity_data_packet::SetEntityMetadataPacket;
 use minecraft_packets::play::set_player_position_and_rotation_packet::SetPlayerPositionAndRotationPacket;
@@ -65,6 +68,7 @@ use minecraft_packets::play::teleport_entity_packet::{
 };
 use minecraft_packets::play::transfer_packet::TransferPacket;
 use minecraft_packets::play::update_time_packet::UpdateTimePacket;
+use minecraft_packets::play::use_item_packet::UseItemPacket;
 use minecraft_packets::status::ping_request_packet::PingRequestPacket;
 use minecraft_packets::status::ping_response_packet::PongResponsePacket;
 use minecraft_packets::status::status_request_packet::StatusRequestPacket;
@@ -471,6 +475,30 @@ pub enum PacketRegistry {
 
     #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:player_input")]
     PlayerInput(PlayerInputPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:container_set_slot"
+    )]
+    SetContainerSlot(SetContainerSlotPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:set_carried_item"
+    )]
+    ServerBoundSetHeldItem(ServerBoundSetHeldItemPacket),
+
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:use_item")]
+    UseItem(UseItemPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:legacy_use_item"
+    )]
+    LegacyUseItem(LegacyUseItemPacket),
 }
 
 impl PacketHandler for PacketRegistry {
@@ -499,6 +527,9 @@ impl PacketHandler for PacketRegistry {
             Self::ServerBoundPlayerAbilities(packet) => packet.handle(client_state, server_state),
             Self::PlayerCommand(packet) => packet.handle(client_state, server_state),
             Self::PlayerInput(packet) => packet.handle(client_state, server_state),
+            Self::ServerBoundSetHeldItem(packet) => packet.handle(client_state, server_state),
+            Self::UseItem(packet) => packet.handle(client_state, server_state),
+            Self::LegacyUseItem(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }
@@ -592,6 +623,72 @@ mod tests {
     }
 
     #[test]
+    fn decodes_pre_v1_21_set_held_item_packet_ids() {
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_8, 0x09),
+            (ProtocolVersion::V1_9, 0x17),
+            (ProtocolVersion::V1_12_2, 0x1a),
+            (ProtocolVersion::V1_13, 0x21),
+            (ProtocolVersion::V1_16, 0x24),
+            (ProtocolVersion::V1_16_2, 0x25),
+            (ProtocolVersion::V1_19, 0x27),
+            (ProtocolVersion::V1_19_1, 0x28),
+            (ProtocolVersion::V1_20, 0x28),
+            (ProtocolVersion::V1_20_2, 0x2b),
+            (ProtocolVersion::V1_20_3, 0x2c),
+            (ProtocolVersion::V1_20_5, 0x2f),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, &[0x00, 0x04]);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::ServerBoundSetHeldItem(packet) => {
+                    assert_eq!(packet.selected_slot(), 4);
+                }
+                _ => panic!("expected set held item packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_pre_v1_21_use_item_packet_ids() {
+        for (version, packet_id, data) in [
+            (ProtocolVersion::V1_9, 0x1d, &[0x00][..]),
+            (ProtocolVersion::V1_12_2, 0x20, &[0x00][..]),
+            (ProtocolVersion::V1_13, 0x2a, &[0x00][..]),
+            (ProtocolVersion::V1_16, 0x2e, &[0x00][..]),
+            (ProtocolVersion::V1_16_2, 0x2f, &[0x00][..]),
+            (ProtocolVersion::V1_19, 0x31, &[0x00, 0x00][..]),
+            (ProtocolVersion::V1_19_1, 0x32, &[0x00, 0x00][..]),
+            (ProtocolVersion::V1_20, 0x32, &[0x00, 0x00][..]),
+            (ProtocolVersion::V1_20_2, 0x35, &[0x00, 0x00][..]),
+            (ProtocolVersion::V1_20_3, 0x36, &[0x00, 0x00][..]),
+            (ProtocolVersion::V1_20_5, 0x39, &[0x00, 0x00][..]),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, data);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::UseItem(packet) => assert!(packet.is_main_hand()),
+                _ => panic!("expected use item packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_legacy_use_item_packet_ids() {
+        for version in [ProtocolVersion::V1_7_2, ProtocolVersion::V1_8] {
+            let raw_packet = RawPacket::from_bytes(0x08, &[]);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::LegacyUseItem(_) => {}
+                _ => panic!("expected legacy use item packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn encodes_current_player_info_remove_packet() {
         let uuid = Uuid::from_u128(1);
         let packet = PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid));
@@ -616,6 +713,53 @@ mod tests {
 
             assert_eq!(raw_packet.packet_id(), Some(packet_id));
             assert_eq!(raw_packet.data(), data);
+        }
+    }
+
+    #[test]
+    fn encodes_set_container_slot_for_pre_v1_21_packet_buckets() {
+        use minecraft_packets::play::LobbySlot;
+
+        for (protocol_version, packet_id) in [
+            (ProtocolVersion::V1_7_2, 0x2f),
+            (ProtocolVersion::V1_8, 0x2f),
+            (ProtocolVersion::V1_9, 0x16),
+            (ProtocolVersion::V1_9_3, 0x16),
+            (ProtocolVersion::V1_10, 0x16),
+            (ProtocolVersion::V1_11, 0x16),
+            (ProtocolVersion::V1_12, 0x16),
+            (ProtocolVersion::V1_12_1, 0x16),
+            (ProtocolVersion::V1_12_2, 0x16),
+            (ProtocolVersion::V1_13, 0x17),
+            (ProtocolVersion::V1_14, 0x16),
+            (ProtocolVersion::V1_15, 0x17),
+            (ProtocolVersion::V1_16, 0x16),
+            (ProtocolVersion::V1_16_2, 0x15),
+            (ProtocolVersion::V1_16_4, 0x15),
+            (ProtocolVersion::V1_17, 0x16),
+            (ProtocolVersion::V1_17_1, 0x16),
+            (ProtocolVersion::V1_18, 0x16),
+            (ProtocolVersion::V1_18_2, 0x16),
+            (ProtocolVersion::V1_19, 0x13),
+            (ProtocolVersion::V1_19_1, 0x13),
+            (ProtocolVersion::V1_19_3, 0x12),
+            (ProtocolVersion::V1_19_4, 0x14),
+            (ProtocolVersion::V1_20, 0x14),
+            (ProtocolVersion::V1_20_2, 0x15),
+            (ProtocolVersion::V1_20_3, 0x15),
+            (ProtocolVersion::V1_20_5, 0x15),
+        ] {
+            let packet = PacketRegistry::SetContainerSlot(SetContainerSlotPacket::hotbar(
+                4,
+                LobbySlot::new(345, 1, None, Vec::new()),
+            ));
+            let raw_packet = packet.encode_packet(protocol_version).unwrap();
+
+            assert_eq!(
+                raw_packet.packet_id(),
+                Some(packet_id),
+                "{protocol_version:?}"
+            );
         }
     }
 
