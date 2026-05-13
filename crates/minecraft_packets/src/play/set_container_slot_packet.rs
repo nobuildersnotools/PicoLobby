@@ -8,7 +8,8 @@ use minecraft_protocol::prelude::*;
 /// Wire format by version:
 /// - Pre-1.9:  `Byte window_id, Short slot, Slot`
 /// - 1.9–1.16: `VarInt window_id, Short slot, Slot`
-/// - 1.17+:   `VarInt window_id, VarInt state_id, Short slot, Slot`
+/// - 1.17:    `VarInt window_id, Short slot, Slot`
+/// - 1.17.1+: `VarInt window_id, VarInt state_id, Short slot, Slot`
 pub struct SetContainerSlotPacket {
     window_id: i8,
     hotbar_slot: u8,
@@ -46,7 +47,7 @@ impl EncodePacket for SetContainerSlotPacket {
             VarInt::new(i32::from(self.window_id)).encode(writer, version)?;
         }
 
-        if version.is_after_inclusive(ProtocolVersion::V1_17) {
+        if version.is_after_inclusive(ProtocolVersion::V1_17_1) {
             // state_id — always 0; we do not track container state
             VarInt::new(0).encode(writer, version)?;
         }
@@ -89,6 +90,28 @@ mod tests {
         assert_eq!(bytes[3], 0x24); // slot low byte (36)
         // empty slot = VarInt(0)
         assert_eq!(bytes[4], 0x00);
+    }
+
+    #[test]
+    fn v1_17_has_no_state_id() {
+        let pkt = SetContainerSlotPacket::hotbar(4, LobbySlot::empty());
+        let bytes = encode(pkt, ProtocolVersion::V1_17);
+        assert_eq!(bytes[0], 0x00); // VarInt(0) window_id
+        assert_eq!(bytes[1], 0x00); // slot high byte
+        assert_eq!(bytes[2], 0x28); // slot low byte (40)
+        assert_eq!(bytes[3], 0x00); // empty slot
+        assert_eq!(bytes.len(), 4);
+    }
+
+    #[test]
+    fn v1_17_1_adds_state_id_before_slot() {
+        let pkt = SetContainerSlotPacket::hotbar(4, LobbySlot::empty());
+        let bytes = encode(pkt, ProtocolVersion::V1_17_1);
+        assert_eq!(bytes[0], 0x00); // VarInt(0) window_id
+        assert_eq!(bytes[1], 0x00); // VarInt(0) state_id
+        assert_eq!(bytes[2], 0x00); // slot high byte
+        assert_eq!(bytes[3], 0x28); // slot low byte (40)
+        assert_eq!(bytes[4], 0x00); // empty slot
     }
 
     #[test]

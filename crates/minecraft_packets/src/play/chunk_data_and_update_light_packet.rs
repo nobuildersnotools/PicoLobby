@@ -54,7 +54,7 @@ impl EncodePacket for ChunkDataAndUpdateLightPacket {
             return Ok(());
         }
 
-        if protocol_version.is_before_inclusive(ProtocolVersion::V1_17) {
+        if protocol_version.is_before_inclusive(ProtocolVersion::V1_16_4) {
             self.full_chunk.encode(writer, protocol_version)?;
         }
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_16_1) {
@@ -136,5 +136,64 @@ impl ChunkDataAndUpdateLightPacket {
             trust_edges: true,
             v1_18_light_data: light_data,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn void_packet() -> ChunkDataAndUpdateLightPacket {
+        ChunkDataAndUpdateLightPacket::void(VoidChunkContext {
+            chunk_x: 0,
+            chunk_z: 0,
+            biome_index: 1,
+            dimension_height: 256,
+            dimension_min_y: 0,
+        })
+    }
+
+    #[test]
+    fn v1_17_chunk_starts_with_section_bitset_then_heightmap() {
+        for protocol_version in [ProtocolVersion::V1_17, ProtocolVersion::V1_17_1] {
+            let packet = void_packet();
+            let mut writer = BinaryWriter::default();
+
+            packet.encode(&mut writer, protocol_version).unwrap();
+
+            let bytes = writer.into_inner();
+            assert_eq!(
+                0x01, bytes[8],
+                "1.17 chunk section bitset must start immediately after chunk coordinates"
+            );
+            assert_eq!(
+                &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF],
+                &bytes[9..17],
+                "1.17 section bitset should include all 16 chunk sections"
+            );
+            assert_eq!(
+                0x0A, bytes[17],
+                "heightmap NBT root must follow the 1.17 section bitset"
+            );
+        }
+    }
+
+    #[test]
+    fn v1_16_4_chunk_keeps_full_chunk_flag_before_primary_mask() {
+        let packet = void_packet();
+        let mut writer = BinaryWriter::default();
+
+        packet
+            .encode(&mut writer, ProtocolVersion::V1_16_4)
+            .unwrap();
+
+        let bytes = writer.into_inner();
+        assert_eq!(0x01, bytes[8], "1.16.4 still includes full_chunk");
+        assert_eq!(
+            &[0xFF, 0xFF, 0x03],
+            &bytes[9..12],
+            "1.16.4 primary mask should follow full_chunk"
+        );
+        assert_eq!(0x0A, bytes[12], "heightmap NBT root should follow the mask");
     }
 }
