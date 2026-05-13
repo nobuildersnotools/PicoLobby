@@ -6,7 +6,8 @@ use pico_text_component::prelude::Component;
 ///
 /// Encodes to the correct wire format for all supported protocol versions:
 /// - Pre-1.13:  `Short item_id, Byte count, Short damage, OptNBT`
-/// - 1.13-1.20.4: `Bool present, VarInt item_id, Byte count, OptNBT`
+/// - 1.13-1.13.1: `Short item_id, Byte count, OptNBT`
+/// - 1.13.2-1.20.4: `Bool present, VarInt item_id, Byte count, OptNBT`
 /// - 1.20.5+:  `VarInt count, VarInt item_id, components…`
 #[derive(Clone)]
 pub struct LobbySlot {
@@ -62,8 +63,10 @@ impl EncodePacket for LobbySlot {
     ) -> Result<(), BinaryWriterError> {
         if version.is_after_inclusive(ProtocolVersion::V1_20_5) {
             encode_structured(self, writer, version)
-        } else if version.is_after_inclusive(ProtocolVersion::V1_13) {
+        } else if version.is_after_inclusive(ProtocolVersion::V1_13_2) {
             encode_legacy_var_int(self, writer, version)
+        } else if version.is_after_inclusive(ProtocolVersion::V1_13) {
+            encode_flat_short(self, writer, version)
         } else {
             encode_legacy_short(self, writer, version)
         }
@@ -125,7 +128,7 @@ fn lore_component_id(version: ProtocolVersion) -> i32 {
     }
 }
 
-// ── 1.13 – 1.20.4  (VarInt ID + optional NBT) ──────────────────────────────
+// ── 1.13.2 – 1.20.4  (VarInt ID + optional NBT) ────────────────────────────
 
 fn encode_legacy_var_int(
     slot: &LobbySlot,
@@ -191,6 +194,23 @@ fn build_display_nbt_modern(
     let mut tag: IndexMap<String, Value> = IndexMap::new();
     tag.insert("display".to_string(), Value::Compound(display));
     Some(Value::Compound(tag))
+}
+
+// ── 1.13 – 1.13.1  (Short ID + optional NBT) ───────────────────────────────
+
+fn encode_flat_short(
+    slot: &LobbySlot,
+    writer: &mut BinaryWriter,
+    version: ProtocolVersion,
+) -> Result<(), BinaryWriterError> {
+    if slot.item_id < 0 {
+        (-1i16).encode(writer, version)?;
+        return Ok(());
+    }
+
+    (slot.item_id as i16).encode(writer, version)?;
+    (slot.count as i8).encode(writer, version)?;
+    encode_opt_nbt_modern(slot, writer, version)
 }
 
 // ── Pre-1.13  (Short ID + Short damage + optional NBT) ─────────────────────
@@ -282,8 +302,15 @@ mod tests {
     #[test]
     fn empty_slot_modern_is_false_byte() {
         let slot = LobbySlot::empty();
-        let bytes = encode(&slot, ProtocolVersion::V1_13);
+        let bytes = encode(&slot, ProtocolVersion::V1_13_2);
         assert_eq!(&bytes, &[0x00]); // bool false
+    }
+
+    #[test]
+    fn empty_slot_v1_13_is_minus_one_short() {
+        let slot = LobbySlot::empty();
+        let bytes = encode(&slot, ProtocolVersion::V1_13_1);
+        assert_eq!(&bytes, &[0xFF, 0xFF]); // -1i16 big-endian
     }
 
     #[test]
@@ -308,7 +335,7 @@ mod tests {
 
     #[test]
     fn non_empty_slot_modern_encodes_bool_varint_count() {
-        // V1_20 uses the legacy bool-present + VarInt-ID format (pre-1.20.5).
+        // V1_13_2 through V1_20_4 use the legacy bool-present + VarInt-ID format.
         // item 888 (compass in V1_20): 888 % 128 = 120, 888 / 128 = 6 → [0xF8, 0x06]
         let slot = LobbySlot::new(888, 1, None, Vec::new());
         let bytes = encode(&slot, ProtocolVersion::V1_20);
@@ -317,6 +344,19 @@ mod tests {
         assert_eq!(bytes[2], 0x06); // VarInt 888 high byte
         assert_eq!(bytes[3], 0x01); // count = 1
         assert_eq!(bytes[4], 0x00); // no NBT
+    }
+
+    #[test]
+    fn non_empty_slot_v1_13_encodes_short_id_without_damage() {
+        // compass = item ID 562 in V1_13; 1.13/1.13.1 use flattened IDs but
+        // still encode slot item IDs as shorts.
+        let slot = LobbySlot::new(562, 1, None, Vec::new());
+        let bytes = encode(&slot, ProtocolVersion::V1_13_1);
+        assert_eq!(bytes[0], 0x02); // high byte of 562
+        assert_eq!(bytes[1], 0x32); // low byte of 562
+        assert_eq!(bytes[2], 0x01); // count = 1
+        assert_eq!(bytes[3], 0x00); // no NBT (TAG_End)
+        assert_eq!(bytes.len(), 4);
     }
 
     #[test]
