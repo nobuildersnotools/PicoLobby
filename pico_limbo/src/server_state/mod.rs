@@ -1113,27 +1113,14 @@ mod tests {
     }
 
     #[test]
-    fn destination_resolves_to_correct_velocity_server_name() {
+    fn destination_resolution() {
         let server = server_with_destinations(vec![
             LobbyDestination::new("survival", "Survival", "survival-1"),
             LobbyDestination::new("creative", "Creative", "creative-1"),
         ]);
 
-        let dest = server.resolve_lobby_destination("survival").unwrap();
-        assert_eq!(dest.server, "survival-1");
-
-        let dest = server.resolve_lobby_destination("creative").unwrap();
-        assert_eq!(dest.server, "creative-1");
-    }
-
-    #[test]
-    fn unknown_destination_returns_error() {
-        let server = server_with_destinations(vec![LobbyDestination::new(
-            "survival",
-            "Survival",
-            "survival-1",
-        )]);
-
+        assert_eq!(server.resolve_lobby_destination("survival").unwrap().server, "survival-1");
+        assert_eq!(server.resolve_lobby_destination("creative").unwrap().server, "creative-1");
         assert!(matches!(
             server.resolve_lobby_destination("minigames"),
             Err(NavigationError::UnknownDestination(id)) if id == "minigames"
@@ -1141,26 +1128,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_server_name_rejected_at_build_time() {
+    fn builder_validates_destination_config() {
+        // empty server name rejected immediately
         let mut builder = ServerState::builder();
-        let result =
-            builder.set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "")]);
         assert!(matches!(
-            result,
+            builder.set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "")]),
             Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"
         ));
-    }
 
-    #[test]
-    fn npc_with_unknown_destination_is_rejected_at_build_time() {
+        // NPC referencing unknown destination rejected at build time
         let mut builder = ServerState::builder();
         builder.set_lobby_enabled(true);
         builder
-            .set_lobby_destinations(vec![LobbyDestination::new(
-                "survival",
-                "Survival",
-                "survival-1",
-            )])
+            .set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "survival-1")])
             .unwrap();
         builder
             .set_lobby_npcs(vec![crate::configuration::lobby::LobbyNpcConfig {
@@ -1174,13 +1154,10 @@ mod tests {
                 pitch: 0.0,
             }])
             .unwrap();
-
         assert!(matches!(
             builder.build(),
-            Err(ServerStateBuilderError::UnknownNpcDestination {
-                npc_id,
-                destination_id
-            }) if npc_id == "creative-npc" && destination_id == "creative"
+            Err(ServerStateBuilderError::UnknownNpcDestination { npc_id, destination_id })
+                if npc_id == "creative-npc" && destination_id == "creative"
         ));
     }
 }

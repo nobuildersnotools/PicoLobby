@@ -52,17 +52,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn selects_legacy_chat_before_1_19() {
-        let packet = chat_packet_for_version(ProtocolVersion::V1_18_2, &Component::new("hello"));
-
-        assert!(matches!(packet, PacketRegistry::LegacyChatMessage(_)));
-    }
-
-    #[test]
-    fn selects_system_chat_from_1_19() {
-        let packet = chat_packet_for_version(ProtocolVersion::V1_19, &Component::new("hello"));
-
-        assert!(matches!(packet, PacketRegistry::SystemChatMessage(_)));
+    fn chat_packet_version_dispatch() {
+        let msg = Component::new("hello");
+        assert!(matches!(
+            chat_packet_for_version(ProtocolVersion::V1_18_2, &msg),
+            PacketRegistry::LegacyChatMessage(_)
+        ));
+        assert!(matches!(
+            chat_packet_for_version(ProtocolVersion::V1_19, &msg),
+            PacketRegistry::SystemChatMessage(_)
+        ));
     }
 
     #[test]

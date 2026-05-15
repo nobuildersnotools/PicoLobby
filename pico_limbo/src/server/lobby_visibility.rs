@@ -463,8 +463,6 @@ mod tests {
     use super::*;
     use crate::server_state::{LobbyRecipient, LobbySessionId};
 
-    const UUID_BYTES: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
-    const LEGACY_UUID_LONGS: [u8; 16] = UUID_BYTES;
     const DEPARTED_NAME: &str = "departed";
 
     fn recipient(session_id: u64, protocol_version: ProtocolVersion) -> LobbyRecipient {
@@ -537,57 +535,40 @@ mod tests {
     }
 
     #[test]
-    fn encodes_leave_visibility_for_oldest_supported_report() {
-        let packets = leave_visibility_packets(
-            ProtocolVersion::V1_7_2,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
+    fn leave_visibility_packets_encode_per_version_bucket() {
+        // (version, entity_remove_id, entity_remove_data, player_info_id, player_info_data)
+        const V1_7_2_ENTITY_DATA: &[u8] = &[1, 0, 0, 1, 44]; // int entity_id
+        const VARINT_ENTITY_DATA: &[u8] = &[1, 172, 2];       // varint 300
+        const V1_7_2_INFO_DATA: &[u8] =
+            &[8, b'd', b'e', b'p', b'a', b'r', b't', b'e', b'd', 0, 0, 0];
+        const LEGACY_INFO_DATA: &[u8] =
+            &[4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
+        const CURRENT_INFO_DATA: &[u8] =
+            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
 
-        assert_destroy_entities_packet(packets, ProtocolVersion::V1_7_2, 19, &[1, 0, 0, 1, 44]);
-        let packets = leave_visibility_packets(
-            ProtocolVersion::V1_7_2,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_player_info_update_packet(
-            packets,
-            ProtocolVersion::V1_7_2,
-            56,
-            &[8, b'd', b'e', b'p', b'a', b'r', b't', b'e', b'd', 0, 0, 0],
-        );
-    }
+        let cases: &[(ProtocolVersion, u8, &[u8], u8, &[u8])] = &[
+            (ProtocolVersion::V1_7_2,  19, V1_7_2_ENTITY_DATA, 56, V1_7_2_INFO_DATA),
+            (ProtocolVersion::V1_8,    19, VARINT_ENTITY_DATA,  56, LEGACY_INFO_DATA),
+            (ProtocolVersion::V1_12_2, 50, VARINT_ENTITY_DATA,  46, LEGACY_INFO_DATA),
+            (ProtocolVersion::V1_19_4, 62, VARINT_ENTITY_DATA,  57, CURRENT_INFO_DATA),
+            (ProtocolVersion::V1_20_5, 66, VARINT_ENTITY_DATA,  61, CURRENT_INFO_DATA),
+            (ProtocolVersion::V1_21,   66, VARINT_ENTITY_DATA,  61, CURRENT_INFO_DATA),
+            (ProtocolVersion::V26_1,   77, VARINT_ENTITY_DATA,  69, CURRENT_INFO_DATA),
+        ];
 
-    #[test]
-    fn encodes_leave_visibility_for_v1_8() {
-        assert_legacy_remove_bucket(ProtocolVersion::V1_8, 19, 56);
-    }
+        for &(version, remove_id, remove_data, info_id, info_data) in cases {
+            let mut packets =
+                leave_visibility_packets(version, Uuid::from_u128(99), DEPARTED_NAME, EntityId::new(300));
+            let raw = packets.remove(0).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(remove_id), "{version:?} entity remove id");
+            assert_eq!(raw.data(), remove_data, "{version:?} entity remove data");
 
-    #[test]
-    fn encodes_leave_visibility_for_v1_12_2_nearest_report() {
-        assert_legacy_remove_bucket(ProtocolVersion::V1_12_2, 50, 46);
-    }
-
-    #[test]
-    fn encodes_leave_visibility_for_v1_19_4() {
-        assert_destroy_with_current_player_info_remove_bucket(ProtocolVersion::V1_19_4, 62, 57);
-    }
-
-    #[test]
-    fn encodes_leave_visibility_for_v1_20_5() {
-        assert_destroy_with_current_player_info_remove_bucket(ProtocolVersion::V1_20_5, 66, 61);
-    }
-
-    #[test]
-    fn encodes_leave_visibility_for_v1_21_plus() {
-        assert_current_remove_bucket(ProtocolVersion::V1_21, 66, 61);
-    }
-
-    #[test]
-    fn encodes_leave_visibility_for_latest_report() {
-        assert_current_remove_bucket(ProtocolVersion::V26_1, 77, 69);
+            let mut packets =
+                leave_visibility_packets(version, Uuid::from_u128(99), DEPARTED_NAME, EntityId::new(300));
+            let raw = packets.remove(1).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(info_id), "{version:?} player info id");
+            assert_eq!(raw.data(), info_data, "{version:?} player info data");
+        }
     }
 
     #[test]
@@ -626,37 +607,29 @@ mod tests {
 
     #[test]
     fn movement_packets_use_pos_rot_and_head_rotation_when_position_and_look_change() {
-        let packets = movement_visibility_packets(
-            ProtocolVersion::V1_21,
-            EntityId::new(300),
-            LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
-            LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
-        );
-
-        assert!(matches!(
-            packets.as_slice(),
-            [
-                PacketRegistry::MoveEntityPosRot(_),
-                PacketRegistry::RotateHead(_)
-            ]
-        ));
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_21)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(47));
-        assert_eq!(
-            raw_packet.data(),
-            &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 1]
-        );
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_21)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(72));
-        assert_eq!(raw_packet.data(), &[0xac, 0x02, 64]);
+        // Verify packet types and wire payload for two representative modern versions.
+        // V1_21 and V1_19_4 produce identical data bytes; only the packet IDs differ.
+        for (version, posrot_id, head_id) in [
+            (ProtocolVersion::V1_21,   47u8, 72u8),
+            (ProtocolVersion::V1_19_4, 44,   66),
+        ] {
+            let mut packets = movement_visibility_packets(
+                version,
+                EntityId::new(300),
+                LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
+                LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
+            );
+            assert!(matches!(
+                packets.as_slice(),
+                [PacketRegistry::MoveEntityPosRot(_), PacketRegistry::RotateHead(_)]
+            ));
+            let raw = packets.remove(0).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(posrot_id), "{version:?} posrot id");
+            assert_eq!(raw.data(), &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 1]);
+            let raw = packets.remove(0).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(head_id), "{version:?} head id");
+            assert_eq!(raw.data(), &[0xac, 0x02, 64]);
+        }
     }
 
     #[test]
@@ -670,52 +643,13 @@ mod tests {
 
         assert!(matches!(
             packets.as_slice(),
-            [
-                PacketRegistry::MoveEntityRot(_),
-                PacketRegistry::RotateHead(_)
-            ]
+            [PacketRegistry::MoveEntityRot(_), PacketRegistry::RotateHead(_)]
         ));
-    }
-
-    #[test]
-    fn movement_packets_encode_for_v1_19_4() {
-        let packets = movement_visibility_packets(
-            ProtocolVersion::V1_19_4,
-            EntityId::new(300),
-            LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
-            LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
-        );
-
-        assert!(matches!(
-            packets.as_slice(),
-            [
-                PacketRegistry::MoveEntityPosRot(_),
-                PacketRegistry::RotateHead(_)
-            ]
-        ));
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_19_4)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(44));
-        assert_eq!(
-            raw_packet.data(),
-            &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 1]
-        );
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_19_4)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(66));
-        assert_eq!(raw_packet.data(), &[0xac, 0x02, 64]);
     }
 
     #[test]
     fn movement_packets_encode_for_v1_8_legacy_byte_delta() {
-        let packets = movement_visibility_packets(
+        let mut packets = movement_visibility_packets(
             ProtocolVersion::V1_8,
             EntityId::new(300),
             LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
@@ -724,120 +658,52 @@ mod tests {
 
         assert!(matches!(
             packets.as_slice(),
-            [
-                PacketRegistry::MoveEntityPosRot(_),
-                PacketRegistry::RotateHead(_)
-            ]
+            [PacketRegistry::MoveEntityPosRot(_), PacketRegistry::RotateHead(_)]
         ));
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_8)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(23));
-        assert_eq!(raw_packet.data(), &[0xac, 0x02, 16, 248, 4, 64, 32, 1]);
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_8)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(25));
-        assert_eq!(raw_packet.data(), &[0xac, 0x02, 64]);
+        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_8).unwrap();
+        assert_eq!(raw.packet_id(), Some(23));
+        assert_eq!(raw.data(), &[0xac, 0x02, 16, 248, 4, 64, 32, 1]);
+        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_8).unwrap();
+        assert_eq!(raw.packet_id(), Some(25));
+        assert_eq!(raw.data(), &[0xac, 0x02, 64]);
     }
 
     #[test]
     fn movement_packets_encode_for_v1_7_2_legacy_int_entity_id() {
-        let packets = movement_visibility_packets(
+        let mut packets = movement_visibility_packets(
             ProtocolVersion::V1_7_2,
             EntityId::new(300),
             LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
             LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
         );
 
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_7_2)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(23));
-        assert_eq!(raw_packet.data(), &[0, 0, 1, 44, 16, 248, 4, 64, 32]);
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_7_2)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(25));
-        assert_eq!(raw_packet.data(), &[0, 0, 1, 44, 64]);
+        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_7_2).unwrap();
+        assert_eq!(raw.packet_id(), Some(23));
+        assert_eq!(raw.data(), &[0, 0, 1, 44, 16, 248, 4, 64, 32]);
+        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_7_2).unwrap();
+        assert_eq!(raw.packet_id(), Some(25));
+        assert_eq!(raw.data(), &[0, 0, 1, 44, 64]);
     }
 
     #[test]
-    fn movement_packets_encode_for_v1_18_2_nearest_report() {
-        let packets = movement_visibility_packets(
-            ProtocolVersion::V1_18_2,
-            EntityId::new(300),
-            LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
-            LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
-        );
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_18_2)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(42));
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_18_2)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(62));
-    }
-
-    #[test]
-    fn movement_packets_encode_for_v1_19_3() {
-        let packets = movement_visibility_packets(
-            ProtocolVersion::V1_19_3,
-            EntityId::new(300),
-            LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
-            LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
-        );
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_19_3)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(40));
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_19_3)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(62));
-    }
-
-    #[test]
-    fn movement_packets_encode_for_v1_20_5() {
-        let packets = movement_visibility_packets(
-            ProtocolVersion::V1_20_5,
-            EntityId::new(300),
-            LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
-            LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
-        );
-
-        let mut packets = packets;
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_20_5)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(47));
-
-        let raw_packet = packets
-            .remove(0)
-            .encode_packet(ProtocolVersion::V1_20_5)
-            .unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(72));
+    fn movement_packet_ids_by_version_bucket() {
+        // Versions that share payload encoding but differ only by packet ID.
+        for (version, posrot_id, head_id) in [
+            (ProtocolVersion::V1_18_2, 42u8, 62u8),
+            (ProtocolVersion::V1_19_3, 40,   62),
+            (ProtocolVersion::V1_20_5, 47,   72),
+        ] {
+            let mut packets = movement_visibility_packets(
+                version,
+                EntityId::new(300),
+                LobbyPosition::new(1.0, 2.0, 3.0, 0.0, 0.0),
+                LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
+            );
+            let raw = packets.remove(0).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(posrot_id), "{version:?} posrot id");
+            let raw = packets.remove(0).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(head_id), "{version:?} head id");
+        }
     }
 
     #[test]
@@ -949,136 +815,6 @@ mod tests {
         );
     }
 
-    fn assert_legacy_remove_bucket(
-        protocol_version: ProtocolVersion,
-        destroy_packet_id: u8,
-        player_info_packet_id: u8,
-    ) {
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_destroy_entities_packet(packets, protocol_version, destroy_packet_id, &[1, 172, 2]);
-
-        let mut player_info_data = vec![4, 1];
-        player_info_data.extend_from_slice(&LEGACY_UUID_LONGS);
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_player_info_update_packet(
-            packets,
-            protocol_version,
-            player_info_packet_id,
-            &player_info_data,
-        );
-    }
-
-    fn assert_current_remove_bucket(
-        protocol_version: ProtocolVersion,
-        remove_entities_packet_id: u8,
-        player_info_remove_packet_id: u8,
-    ) {
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_remove_entities_packet(packets, protocol_version, remove_entities_packet_id);
-
-        let mut player_info_data = vec![1];
-        player_info_data.extend_from_slice(&UUID_BYTES);
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_player_info_remove_packet(
-            packets,
-            protocol_version,
-            player_info_remove_packet_id,
-            &player_info_data,
-        );
-    }
-
-    fn assert_destroy_with_current_player_info_remove_bucket(
-        protocol_version: ProtocolVersion,
-        destroy_packet_id: u8,
-        player_info_remove_packet_id: u8,
-    ) {
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_destroy_entities_packet(packets, protocol_version, destroy_packet_id, &[1, 172, 2]);
-
-        let mut player_info_data = vec![1];
-        player_info_data.extend_from_slice(&UUID_BYTES);
-        let packets = leave_visibility_packets(
-            protocol_version,
-            Uuid::from_u128(99),
-            DEPARTED_NAME,
-            EntityId::new(300),
-        );
-        assert_player_info_remove_packet(
-            packets,
-            protocol_version,
-            player_info_remove_packet_id,
-            &player_info_data,
-        );
-    }
-
-    fn assert_destroy_entities_packet(
-        mut packets: Vec<PacketRegistry>,
-        protocol_version: ProtocolVersion,
-        packet_id: u8,
-        data: &[u8],
-    ) {
-        let raw_packet = packets.remove(0).encode_packet(protocol_version).unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(packet_id));
-        assert_eq!(raw_packet.data(), data);
-    }
-
-    fn assert_remove_entities_packet(
-        mut packets: Vec<PacketRegistry>,
-        protocol_version: ProtocolVersion,
-        packet_id: u8,
-    ) {
-        let raw_packet = packets.remove(0).encode_packet(protocol_version).unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(packet_id));
-        assert_eq!(raw_packet.data(), &[1, 172, 2]);
-    }
-
-    fn assert_player_info_update_packet(
-        mut packets: Vec<PacketRegistry>,
-        protocol_version: ProtocolVersion,
-        packet_id: u8,
-        data: &[u8],
-    ) {
-        let raw_packet = packets.remove(1).encode_packet(protocol_version).unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(packet_id));
-        assert_eq!(raw_packet.data(), data);
-    }
-
-    fn assert_player_info_remove_packet(
-        mut packets: Vec<PacketRegistry>,
-        protocol_version: ProtocolVersion,
-        packet_id: u8,
-        data: &[u8],
-    ) {
-        let raw_packet = packets.remove(1).encode_packet(protocol_version).unwrap();
-        assert_eq!(raw_packet.packet_id(), Some(packet_id));
-        assert_eq!(raw_packet.data(), data);
-    }
-
     fn make_session(session_id: u64, uuid_val: u128, entity_id: i32) -> LobbySession {
         let mut session = LobbySession::new(
             Uuid::from_u128(uuid_val),
@@ -1110,41 +846,25 @@ mod tests {
     }
 
     #[test]
-    fn join_newcomer_packets_empty_when_no_existing_players() {
-        let new = make_session(1, 1, 10);
-        let plan = join_plan(new, Vec::new());
-        let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21);
-        assert!(packets.is_empty());
+    fn join_visibility_empty_without_counterparts() {
+        let plan = join_plan(make_session(1, 1, 10), Vec::new());
+        assert!(join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21).is_empty());
+        assert!(join_visibility_batches_for_existing(&plan).is_empty());
     }
 
     #[test]
-    fn join_newcomer_v1_20_5_gets_current_spawn_entity_packets() {
+    fn join_newcomer_current_versions_get_four_spawn_entity_packets() {
         let new = make_session(1, 1, 10);
         let existing = make_session(2, 2, 20);
         let plan = join_plan(new, vec![existing]);
-        let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_20_5);
-        assert_eq!(packets.len(), 4);
-        assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
-        assert!(matches!(packets[1], PacketRegistry::SpawnEntity(_)));
-        assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
-        assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
-    }
-
-    #[test]
-    fn join_newcomer_gets_four_packets_per_existing_player() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21);
-        assert_eq!(
-            packets.len(),
-            4,
-            "expected PlayerInfo + Spawn + Metadata + HeadRotation"
-        );
-        assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
-        assert!(matches!(packets[1], PacketRegistry::SpawnEntity(_)));
-        assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
-        assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+        for version in [ProtocolVersion::V1_20_5, ProtocolVersion::V1_21] {
+            let packets = join_visibility_packets_for_newcomer(&plan, version);
+            assert_eq!(packets.len(), 4, "{version:?}");
+            assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
+            assert!(matches!(packets[1], PacketRegistry::SpawnEntity(_)));
+            assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
+            assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+        }
     }
 
     #[test]
@@ -1153,137 +873,40 @@ mod tests {
         let existing = vec![make_session(2, 2, 20), make_session(3, 3, 30)];
         let plan = join_plan(new, existing);
         let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21);
-        assert_eq!(
-            packets.len(),
-            8,
-            "4 packets per existing player * 2 players"
-        );
+        assert_eq!(packets.len(), 8, "4 packets per existing player * 2 players");
     }
 
     #[test]
-    fn join_existing_batches_empty_when_no_existing_recipients() {
-        let new = make_session(1, 1, 10);
-        let plan = join_plan(new, Vec::new());
-        let batches = join_visibility_batches_for_existing(&plan);
-        assert!(batches.is_empty());
-    }
+    fn spawn_entity_packet_version_encoding() {
+        // Each entry: (version, existing_entity_id, expected_data_len, type_id_offset, type_id_bytes, tail_offset, tail_bytes)
+        struct Case {
+            version: ProtocolVersion,
+            entity_id: i32,
+            len: usize,
+            type_offset: usize,
+            type_bytes: &'static [u8],
+            tail_offset: usize,
+            tail_bytes: &'static [u8],
+        }
+        let cases = [
+            Case { version: ProtocolVersion::V1_20_2, entity_id: 400, len: 53, type_offset: 18, type_bytes: &[0x7a],       tail_offset: 46, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
+            Case { version: ProtocolVersion::V1_20_3, entity_id: 400, len: 53, type_offset: 18, type_bytes: &[0x7c],       tail_offset: 45, tail_bytes: &[64] },
+            Case { version: ProtocolVersion::V1_20_5, entity_id: 400, len: 54, type_offset: 18, type_bytes: &[0x80, 0x01], tail_offset: 47, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
+            Case { version: ProtocolVersion::V1_21,   entity_id: 400, len: 54, type_offset: 18, type_bytes: &[0x80, 0x01], tail_offset: 47, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
+            // V26_1: entity_id=1 is a 1-byte VarInt so type lands at offset 17
+            Case { version: ProtocolVersion::V26_1,   entity_id: 1,   len: 48, type_offset: 17, type_bytes: &[0x9b, 0x01], tail_offset: 43, tail_bytes: &[0, 0, 64, 64, 0] },
+        ];
 
-    #[test]
-    fn join_existing_batches_include_v1_20_5_recipients() {
-        let new = make_session(1, 1, 10);
-        let mut existing = make_session(2, 2, 20);
-        existing.protocol_version = ProtocolVersion::V1_20_5;
-        let plan = join_plan(new, vec![existing]);
-        let batches = join_visibility_batches_for_existing(&plan);
-        assert_eq!(batches.len(), 1);
-        assert!(matches!(
-            batches[0].packets[1],
-            PacketRegistry::SpawnEntity(_)
-        ));
-    }
-
-    #[test]
-    fn join_existing_batches_include_four_packets_for_1_21_recipients() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let batches = join_visibility_batches_for_existing(&plan);
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].packets.len(), 4);
-        assert!(matches!(
-            batches[0].packets[0],
-            PacketRegistry::PlayerInfoUpdate(_)
-        ));
-        assert!(matches!(
-            batches[0].packets[1],
-            PacketRegistry::SpawnEntity(_)
-        ));
-    }
-
-    #[test]
-    fn spawn_entity_packet_encodes_for_v1_21() {
-        let new = make_session(1, 1, 300);
-        let existing = make_session(2, 2, 400);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_21).unwrap();
-        assert_eq!(raw.packet_id(), Some(1));
-        let data = raw.data();
-        assert_eq!(data.len(), 54);
-        // entity_id 400 = VarInt [0x90, 0x03]
-        assert_eq!(&data[0..2], &[0x90, 0x03]);
-        // entity type 128 = VarInt [0x80, 0x01]
-        assert_eq!(&data[18..20], &[0x80, 0x01]);
-        // data VarInt + legacy zero velocity as three shorts
-        assert_eq!(&data[47..54], &[0, 0, 0, 0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn spawn_entity_packet_encodes_for_v1_20_2() {
-        let new = make_session(1, 1, 300);
-        let existing = make_session(2, 2, 400);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_20_2);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_20_2).unwrap();
-        assert_eq!(raw.packet_id(), Some(1));
-        let data = raw.data();
-        assert_eq!(data.len(), 53);
-        // entity type 122 = VarInt [0x7a]
-        assert_eq!(data[18], 0x7a);
-        assert_eq!(data[45], 64); // head yaw
-        // data VarInt + legacy zero velocity as three shorts
-        assert_eq!(&data[46..53], &[0, 0, 0, 0, 0, 0, 0]);
-    }
-
-    #[test]
-    fn spawn_entity_packet_encodes_for_v1_20_3() {
-        let new = make_session(1, 1, 300);
-        let existing = make_session(2, 2, 400);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_20_3);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_20_3).unwrap();
-        assert_eq!(raw.packet_id(), Some(1));
-        let data = raw.data();
-        assert_eq!(data.len(), 53);
-        // entity type 124 = VarInt [0x7c]
-        assert_eq!(data[18], 0x7c);
-        assert_eq!(data[45], 64); // head yaw
-    }
-
-    #[test]
-    fn spawn_entity_packet_encodes_for_v1_20_5() {
-        let new = make_session(1, 1, 300);
-        let existing = make_session(2, 2, 400);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_20_5);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_20_5).unwrap();
-        assert_eq!(raw.packet_id(), Some(1));
-        let data = raw.data();
-        assert_eq!(data.len(), 54);
-        // entity type 128 = VarInt [0x80, 0x01]
-        assert_eq!(&data[18..20], &[0x80, 0x01]);
-    }
-
-    #[test]
-    fn spawn_entity_packet_encodes_for_v26_1() {
-        let new = make_session(1, 1, 300);
-        // entity_id=1 encodes as 1-byte VarInt [0x01], uuid=16 bytes, entity type at offset 17
-        let existing = make_session(2, 2, 1);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V26_1);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V26_1).unwrap();
-        assert_eq!(raw.packet_id(), Some(1));
-        let data = raw.data();
-        assert_eq!(data.len(), 48);
-        // entity type 155 = VarInt [0x9b, 0x01]
-        assert_eq!(&data[17..19], &[0x9b, 0x01]);
-        // 1.21.9+ moved low-precision Vec3 velocity before rotations and keeps data as a VarInt.
-        assert_eq!(&data[43..48], &[0, 0, 64, 64, 0]);
+        for case in &cases {
+            let plan = join_plan(make_session(1, 1, 300), vec![make_session(2, 2, case.entity_id)]);
+            let mut packets = join_visibility_packets_for_newcomer(&plan, case.version);
+            let raw = packets.remove(1).encode_packet(case.version).unwrap();
+            let data = raw.data();
+            assert_eq!(raw.packet_id(), Some(1), "{:?} packet_id", case.version);
+            assert_eq!(data.len(), case.len, "{:?} data len", case.version);
+            assert_eq!(&data[case.type_offset..case.type_offset + case.type_bytes.len()], case.type_bytes, "{:?} entity type", case.version);
+            assert_eq!(&data[case.tail_offset..case.tail_offset + case.tail_bytes.len()], case.tail_bytes, "{:?} tail", case.version);
+        }
     }
 
     #[test]
@@ -1308,88 +931,38 @@ mod tests {
     // --- Legacy join visibility (V1_8 through V1_20) ---
 
     #[test]
-    fn join_newcomer_v1_8_gets_four_packets_with_spawn_player() {
+    fn join_newcomer_legacy_versions_get_four_spawn_player_packets() {
         let new = make_session(1, 1, 10);
         let existing = make_session(2, 2, 20);
         let plan = join_plan(new, vec![existing]);
-        let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_8);
-        assert_eq!(packets.len(), 4);
-        assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
-        assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
-        assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
-        assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+        for version in [ProtocolVersion::V1_7_2, ProtocolVersion::V1_8] {
+            let packets = join_visibility_packets_for_newcomer(&plan, version);
+            assert_eq!(packets.len(), 4, "{version:?}");
+            assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
+            assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
+            assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
+            assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+        }
     }
 
     #[test]
-    fn join_newcomer_v1_12_2_gets_spawn_player_packet() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_12_2);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_12_2).unwrap();
-        // minecraft:add_player for V1_12 = ID 5
-        assert_eq!(raw.packet_id(), Some(5));
-        // data = entity_id (VarInt 20=[0x14]) + uuid (16 bytes) + x,y,z (3*f64=24 bytes) +
-        //        yaw, pitch (2 bytes) + empty metadata list terminator.
-        assert_eq!(raw.data().len(), 44);
-        assert_eq!(raw.data()[43], 0xFF);
-    }
-
-    #[test]
-    fn join_newcomer_v1_14_4_gets_spawn_player_packet_with_empty_metadata_list() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_14_4);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_14_4).unwrap();
-        // minecraft:add_player for V1_14 = ID 5
-        assert_eq!(raw.packet_id(), Some(5));
-        assert_eq!(raw.data().len(), 44);
-        assert_eq!(raw.data()[43], 0xFF);
-    }
-
-    #[test]
-    fn join_newcomer_v1_19_4_gets_spawn_player_packet_without_metadata_terminator() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_19_4);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_19_4).unwrap();
-        // minecraft:add_player for V1_19_4 = ID 3
-        assert_eq!(raw.packet_id(), Some(3));
-        // data = entity_id (VarInt 20=[0x14]) + uuid (16 bytes) + x,y,z (3×f64=24 bytes) +
-        //        yaw, pitch (2 bytes) — no metadata terminator in 1.19.4+
-        assert_eq!(raw.data().len(), 43);
-    }
-
-    #[test]
-    fn join_newcomer_v1_20_gets_spawn_player_packet() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_20);
-        let spawn = packets.remove(1);
-        let raw = spawn.encode_packet(ProtocolVersion::V1_20).unwrap();
-        // minecraft:add_player for V1_20 = ID 3
-        assert_eq!(raw.packet_id(), Some(3));
-        assert_eq!(raw.data().len(), 43);
-    }
-
-    #[test]
-    fn join_newcomer_v1_7_2_gets_legacy_spawn_player_packet() {
-        let new = make_session(1, 1, 10);
-        let existing = make_session(2, 2, 20);
-        let plan = join_plan(new, vec![existing]);
-        let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_7_2);
-
-        assert_eq!(packets.len(), 4);
-        assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
-        assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
-        assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
-        assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+    fn legacy_spawn_player_packet_version_encoding() {
+        // (version, expected_packet_id, expected_data_len, has_0xff_metadata_terminator)
+        for (version, expected_id, expected_len, has_terminator) in [
+            (ProtocolVersion::V1_12_2, 5u8, 44usize, true),
+            (ProtocolVersion::V1_14_4, 5,   44,       true),
+            (ProtocolVersion::V1_19_4, 3,   43,       false),
+            (ProtocolVersion::V1_20,   3,   43,       false),
+        ] {
+            let plan = join_plan(make_session(1, 1, 10), vec![make_session(2, 2, 20)]);
+            let mut packets = join_visibility_packets_for_newcomer(&plan, version);
+            let raw = packets.remove(1).encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?} packet_id");
+            assert_eq!(raw.data().len(), expected_len, "{version:?} data len");
+            if has_terminator {
+                assert_eq!(raw.data()[expected_len - 1], 0xFF, "{version:?} metadata terminator");
+            }
+        }
     }
 
     #[test]
