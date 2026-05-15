@@ -51,25 +51,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encodes_legacy_rejection() {
-        let packet = ConfirmTransactionPacket::new(3, 42, false);
+    fn round_trips_legacy_rejection() {
+        let wire = [0x03u8, 0x00, 0x2a, 0x00]; // window=3, action=42, accepted=false
+
         let mut writer = BinaryWriter::default();
-        packet
+        ConfirmTransactionPacket::new(3, 42, false)
             .encode(&mut writer, ProtocolVersion::V1_12_2)
             .unwrap();
+        assert_eq!(writer.as_slice(), &wire);
 
-        assert_eq!(writer.as_slice(), &[0x03, 0x00, 0x2a, 0x00]);
-    }
-
-    #[test]
-    fn decodes_legacy_acknowledgement() {
-        let bytes = [0x03, 0x00, 0x2a, 0x00];
-        let mut reader = BinaryReader::new(&bytes);
-        let packet = ConfirmTransactionPacket::decode(&mut reader, ProtocolVersion::V1_12_2)
-            .expect("valid packet");
-
-        assert_eq!(packet.window_id, 3);
-        assert_eq!(packet.action_number, 42);
-        assert!(!packet.accepted);
+        let decoded = ConfirmTransactionPacket::decode(
+            &mut BinaryReader::new(&wire),
+            ProtocolVersion::V1_12_2,
+        )
+        .unwrap();
+        assert_eq!(decoded.window_id, 3);
+        assert_eq!(decoded.action_number, 42);
+        assert!(!decoded.accepted);
     }
 }

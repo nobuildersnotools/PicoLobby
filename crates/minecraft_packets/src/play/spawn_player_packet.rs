@@ -235,68 +235,36 @@ mod tests {
     }
 
     #[test]
-    fn encodes_spawn_player_for_v1_12_2() {
-        let data = encode(make_packet(), ProtocolVersion::V1_12_2);
-
-        // entity_id VarInt(300) = [0xac, 0x02]
-        // uuid as 2 longs (16 bytes)
-        // x, y, z as f64 (24 bytes)
-        // yaw, pitch (2 bytes)
-        // empty modern metadata list terminator in 1.9 through 1.14.4
-        assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
-        let x_bytes = f64::to_be_bytes(10.5);
-        assert_eq!(data[18..26], x_bytes); // x as f64
-        assert_eq!(data[42], 64); // yaw = 90°
-        assert_eq!(data[43], 0); // pitch = 0°
-        assert_eq!(data[44], 0xFF); // metadata terminator
-        assert_eq!(data.len(), 45);
+    fn v1_9_to_v1_14_encodes_f64_coords_with_metadata_terminator() {
+        // 1.9–1.14.4: f64 position, inline metadata list terminator 0xFF.
+        for version in [ProtocolVersion::V1_12_2, ProtocolVersion::V1_14_4] {
+            let data = encode(make_packet(), version);
+            assert_eq!(&data[0..2], &[0xac, 0x02], "entity_id for {version:?}");
+            assert_eq!(
+                &data[18..26],
+                &f64::to_be_bytes(10.5),
+                "x f64 for {version:?}"
+            );
+            assert_eq!(data[42], 64, "yaw for {version:?}");
+            assert_eq!(data[43], 0, "pitch for {version:?}");
+            assert_eq!(data[44], 0xFF, "metadata terminator for {version:?}");
+            assert_eq!(data.len(), 45, "total length for {version:?}");
+        }
     }
 
     #[test]
-    fn encodes_spawn_player_for_v1_14_4_with_empty_metadata_list() {
-        let data = encode(make_packet(), ProtocolVersion::V1_14_4);
-
-        assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
-        assert_eq!(data[42], 64); // yaw = 90°
-        assert_eq!(data[43], 0); // pitch = 0°
-        assert_eq!(data[44], 0xFF); // metadata terminator
-        assert_eq!(data.len(), 45);
-    }
-
-    #[test]
-    fn encodes_spawn_player_for_v1_15_2_without_metadata_terminator() {
-        let data = encode(make_packet(), ProtocolVersion::V1_15_2);
-
-        assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
-        assert_eq!(data[42], 64); // yaw = 90°
-        assert_eq!(data[43], 0); // pitch = 0°
-        assert_eq!(data.len(), 44); // no metadata terminator
-    }
-
-    #[test]
-    fn encodes_spawn_player_for_v1_19_4() {
-        let data = encode(make_packet(), ProtocolVersion::V1_19_4);
-
-        // entity_id VarInt(300) = [0xac, 0x02]
-        // uuid as 2 longs (16 bytes)
-        // x, y, z as f64 (24 bytes)
-        // yaw, pitch (2 bytes)
-        // NO metadata terminator in 1.19.4+
-        assert_eq!(data[0..2], [0xac, 0x02]);
-        let x_bytes = f64::to_be_bytes(10.5);
-        assert_eq!(data[18..26], x_bytes);
-        assert_eq!(data[42], 64); // yaw
-        assert_eq!(data[43], 0); // pitch
-        assert_eq!(data.len(), 44); // no metadata terminator
-    }
-
-    #[test]
-    fn encodes_spawn_player_for_v1_20() {
-        let data = encode(make_packet(), ProtocolVersion::V1_20);
-
-        // Same as 1.19.4 - no metadata terminator
-        assert_eq!(data.len(), 44);
-        assert_eq!(data[42], 64); // yaw
-        assert_eq!(data[43], 0); // pitch
+    fn v1_15_and_later_omits_metadata_terminator() {
+        // 1.15+: no inline metadata field, payload is 44 bytes.
+        for version in [
+            ProtocolVersion::V1_15_2,
+            ProtocolVersion::V1_19_4,
+            ProtocolVersion::V1_20,
+        ] {
+            let data = encode(make_packet(), version);
+            assert_eq!(&data[0..2], &[0xac, 0x02], "entity_id for {version:?}");
+            assert_eq!(data[42], 64, "yaw for {version:?}");
+            assert_eq!(data[43], 0, "pitch for {version:?}");
+            assert_eq!(data.len(), 44, "no metadata terminator for {version:?}");
+        }
     }
 }

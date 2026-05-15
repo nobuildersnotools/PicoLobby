@@ -102,7 +102,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bungeecord_connect_channel_and_payload() {
+    fn bungeecord_connect_payload_and_channel_names() {
         let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect("survival");
 
         assert_eq!(
@@ -113,66 +113,46 @@ mod tests {
 
         let data: Vec<u8> = packet.data.iter().map(|&b| b as u8).collect();
         let mut expected: Vec<u8> = Vec::new();
-        expected.extend_from_slice(&[0x00, 0x07]); // "Connect" length
+        expected.extend_from_slice(&[0x00, 0x07]);
         expected.extend_from_slice(b"Connect");
-        expected.extend_from_slice(&[0x00, 0x08]); // "survival" length
+        expected.extend_from_slice(&[0x00, 0x08]);
         expected.extend_from_slice(b"survival");
         assert_eq!(data, expected);
-    }
 
-    #[test]
-    fn bungeecord_connect_empty_server_name_produces_zero_length_field() {
-        let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect("");
-        let data: Vec<u8> = packet.data.iter().map(|&b| b as u8).collect();
-        // "Connect" header then 0x00 0x00 for empty name
+        // Empty server name: two zero bytes for the length field.
+        let empty = PlayClientBoundPluginMessagePacket::bungeecord_connect("");
+        let data: Vec<u8> = empty.data.iter().map(|&b| b as u8).collect();
         assert_eq!(&data[9..], &[0x00, 0x00]);
     }
 
     #[test]
-    fn modern_bungeecord_connect_packet_has_no_outer_payload_length() {
-        let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect("auth");
-        let mut writer = BinaryWriter::default();
-        packet.encode(&mut writer, ProtocolVersion::V1_21).unwrap();
-
-        let mut expected = Vec::new();
-        expected.push(15); // channel string length
-        expected.extend_from_slice(b"bungeecord:main");
-        expected.extend_from_slice(&[0x00, 0x07]);
-        expected.extend_from_slice(b"Connect");
-        expected.extend_from_slice(&[0x00, 0x04]);
-        expected.extend_from_slice(b"auth");
-
-        assert_eq!(writer.as_slice(), expected);
+    fn full_encode_uses_correct_channel_per_era() {
+        // modern: "bungeecord:main" (15 bytes), legacy: "BungeeCord" (10 bytes)
+        let cases: &[(ProtocolVersion, u8, &[u8])] = &[
+            (ProtocolVersion::V1_21, 15, b"bungeecord:main"),
+            (ProtocolVersion::V1_12_2, 10, b"BungeeCord"),
+        ];
+        for &(version, chan_len, chan_bytes) in cases {
+            let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect("auth");
+            let mut writer = BinaryWriter::default();
+            packet.encode(&mut writer, version).unwrap();
+            let bytes = writer.as_slice();
+            assert_eq!(bytes[0], chan_len, "channel len for {version:?}");
+            assert_eq!(
+                &bytes[1..1 + chan_len as usize],
+                chan_bytes,
+                "channel for {version:?}"
+            );
+        }
     }
 
     #[test]
-    fn legacy_bungeecord_connect_uses_bungeecord_channel() {
-        let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect("auth");
-        let mut writer = BinaryWriter::default();
-        packet
-            .encode(&mut writer, ProtocolVersion::V1_12_2)
-            .unwrap();
-
-        let mut expected = Vec::new();
-        expected.push(10); // channel string length
-        expected.extend_from_slice(b"BungeeCord");
-        expected.extend_from_slice(&[0x00, 0x07]);
-        expected.extend_from_slice(b"Connect");
-        expected.extend_from_slice(&[0x00, 0x04]);
-        expected.extend_from_slice(b"auth");
-
-        assert_eq!(writer.as_slice(), expected);
-    }
-
-    #[test]
-    fn brand_payload_still_encodes_minecraft_string() {
+    fn brand_payload_encodes_minecraft_varint_prefixed_string() {
         let packet = PlayClientBoundPluginMessagePacket::brand("PicoLobby");
         let data: Vec<u8> = packet.data.iter().map(|&b| b as u8).collect();
-
         let mut expected = Vec::new();
         expected.push(9);
         expected.extend_from_slice(b"PicoLobby");
-
         assert_eq!(data, expected);
     }
 }

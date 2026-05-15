@@ -538,33 +538,85 @@ mod tests {
     fn leave_visibility_packets_encode_per_version_bucket() {
         // (version, entity_remove_id, entity_remove_data, player_info_id, player_info_data)
         const V1_7_2_ENTITY_DATA: &[u8] = &[1, 0, 0, 1, 44]; // int entity_id
-        const VARINT_ENTITY_DATA: &[u8] = &[1, 172, 2];       // varint 300
+        const VARINT_ENTITY_DATA: &[u8] = &[1, 172, 2]; // varint 300
         const V1_7_2_INFO_DATA: &[u8] =
             &[8, b'd', b'e', b'p', b'a', b'r', b't', b'e', b'd', 0, 0, 0];
-        const LEGACY_INFO_DATA: &[u8] =
-            &[4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
-        const CURRENT_INFO_DATA: &[u8] =
-            &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
+        const LEGACY_INFO_DATA: &[u8] = &[4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
+        const CURRENT_INFO_DATA: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
 
         let cases: &[(ProtocolVersion, u8, &[u8], u8, &[u8])] = &[
-            (ProtocolVersion::V1_7_2,  19, V1_7_2_ENTITY_DATA, 56, V1_7_2_INFO_DATA),
-            (ProtocolVersion::V1_8,    19, VARINT_ENTITY_DATA,  56, LEGACY_INFO_DATA),
-            (ProtocolVersion::V1_12_2, 50, VARINT_ENTITY_DATA,  46, LEGACY_INFO_DATA),
-            (ProtocolVersion::V1_19_4, 62, VARINT_ENTITY_DATA,  57, CURRENT_INFO_DATA),
-            (ProtocolVersion::V1_20_5, 66, VARINT_ENTITY_DATA,  61, CURRENT_INFO_DATA),
-            (ProtocolVersion::V1_21,   66, VARINT_ENTITY_DATA,  61, CURRENT_INFO_DATA),
-            (ProtocolVersion::V26_1,   77, VARINT_ENTITY_DATA,  69, CURRENT_INFO_DATA),
+            (
+                ProtocolVersion::V1_7_2,
+                19,
+                V1_7_2_ENTITY_DATA,
+                56,
+                V1_7_2_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V1_8,
+                19,
+                VARINT_ENTITY_DATA,
+                56,
+                LEGACY_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V1_12_2,
+                50,
+                VARINT_ENTITY_DATA,
+                46,
+                LEGACY_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V1_19_4,
+                62,
+                VARINT_ENTITY_DATA,
+                57,
+                CURRENT_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V1_20_5,
+                66,
+                VARINT_ENTITY_DATA,
+                61,
+                CURRENT_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V1_21,
+                66,
+                VARINT_ENTITY_DATA,
+                61,
+                CURRENT_INFO_DATA,
+            ),
+            (
+                ProtocolVersion::V26_1,
+                77,
+                VARINT_ENTITY_DATA,
+                69,
+                CURRENT_INFO_DATA,
+            ),
         ];
 
         for &(version, remove_id, remove_data, info_id, info_data) in cases {
-            let mut packets =
-                leave_visibility_packets(version, Uuid::from_u128(99), DEPARTED_NAME, EntityId::new(300));
+            let mut packets = leave_visibility_packets(
+                version,
+                Uuid::from_u128(99),
+                DEPARTED_NAME,
+                EntityId::new(300),
+            );
             let raw = packets.remove(0).encode_packet(version).unwrap();
-            assert_eq!(raw.packet_id(), Some(remove_id), "{version:?} entity remove id");
+            assert_eq!(
+                raw.packet_id(),
+                Some(remove_id),
+                "{version:?} entity remove id"
+            );
             assert_eq!(raw.data(), remove_data, "{version:?} entity remove data");
 
-            let mut packets =
-                leave_visibility_packets(version, Uuid::from_u128(99), DEPARTED_NAME, EntityId::new(300));
+            let mut packets = leave_visibility_packets(
+                version,
+                Uuid::from_u128(99),
+                DEPARTED_NAME,
+                EntityId::new(300),
+            );
             let raw = packets.remove(1).encode_packet(version).unwrap();
             assert_eq!(raw.packet_id(), Some(info_id), "{version:?} player info id");
             assert_eq!(raw.data(), info_data, "{version:?} player info data");
@@ -610,8 +662,8 @@ mod tests {
         // Verify packet types and wire payload for two representative modern versions.
         // V1_21 and V1_19_4 produce identical data bytes; only the packet IDs differ.
         for (version, posrot_id, head_id) in [
-            (ProtocolVersion::V1_21,   47u8, 72u8),
-            (ProtocolVersion::V1_19_4, 44,   66),
+            (ProtocolVersion::V1_21, 47u8, 72u8),
+            (ProtocolVersion::V1_19_4, 44, 66),
         ] {
             let mut packets = movement_visibility_packets(
                 version,
@@ -621,11 +673,17 @@ mod tests {
             );
             assert!(matches!(
                 packets.as_slice(),
-                [PacketRegistry::MoveEntityPosRot(_), PacketRegistry::RotateHead(_)]
+                [
+                    PacketRegistry::MoveEntityPosRot(_),
+                    PacketRegistry::RotateHead(_)
+                ]
             ));
             let raw = packets.remove(0).encode_packet(version).unwrap();
             assert_eq!(raw.packet_id(), Some(posrot_id), "{version:?} posrot id");
-            assert_eq!(raw.data(), &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 1]);
+            assert_eq!(
+                raw.data(),
+                &[0xac, 0x02, 0x08, 0x00, 0xfc, 0x00, 0x02, 0x00, 64, 32, 1]
+            );
             let raw = packets.remove(0).encode_packet(version).unwrap();
             assert_eq!(raw.packet_id(), Some(head_id), "{version:?} head id");
             assert_eq!(raw.data(), &[0xac, 0x02, 64]);
@@ -643,7 +701,10 @@ mod tests {
 
         assert!(matches!(
             packets.as_slice(),
-            [PacketRegistry::MoveEntityRot(_), PacketRegistry::RotateHead(_)]
+            [
+                PacketRegistry::MoveEntityRot(_),
+                PacketRegistry::RotateHead(_)
+            ]
         ));
     }
 
@@ -658,12 +719,21 @@ mod tests {
 
         assert!(matches!(
             packets.as_slice(),
-            [PacketRegistry::MoveEntityPosRot(_), PacketRegistry::RotateHead(_)]
+            [
+                PacketRegistry::MoveEntityPosRot(_),
+                PacketRegistry::RotateHead(_)
+            ]
         ));
-        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_8).unwrap();
+        let raw = packets
+            .remove(0)
+            .encode_packet(ProtocolVersion::V1_8)
+            .unwrap();
         assert_eq!(raw.packet_id(), Some(23));
         assert_eq!(raw.data(), &[0xac, 0x02, 16, 248, 4, 64, 32, 1]);
-        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_8).unwrap();
+        let raw = packets
+            .remove(0)
+            .encode_packet(ProtocolVersion::V1_8)
+            .unwrap();
         assert_eq!(raw.packet_id(), Some(25));
         assert_eq!(raw.data(), &[0xac, 0x02, 64]);
     }
@@ -677,10 +747,16 @@ mod tests {
             LobbyPosition::new(1.5, 1.75, 3.125, 90.0, 45.0),
         );
 
-        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_7_2).unwrap();
+        let raw = packets
+            .remove(0)
+            .encode_packet(ProtocolVersion::V1_7_2)
+            .unwrap();
         assert_eq!(raw.packet_id(), Some(23));
         assert_eq!(raw.data(), &[0, 0, 1, 44, 16, 248, 4, 64, 32]);
-        let raw = packets.remove(0).encode_packet(ProtocolVersion::V1_7_2).unwrap();
+        let raw = packets
+            .remove(0)
+            .encode_packet(ProtocolVersion::V1_7_2)
+            .unwrap();
         assert_eq!(raw.packet_id(), Some(25));
         assert_eq!(raw.data(), &[0, 0, 1, 44, 64]);
     }
@@ -690,8 +766,8 @@ mod tests {
         // Versions that share payload encoding but differ only by packet ID.
         for (version, posrot_id, head_id) in [
             (ProtocolVersion::V1_18_2, 42u8, 62u8),
-            (ProtocolVersion::V1_19_3, 40,   62),
-            (ProtocolVersion::V1_20_5, 47,   72),
+            (ProtocolVersion::V1_19_3, 40, 62),
+            (ProtocolVersion::V1_20_5, 47, 72),
         ] {
             let mut packets = movement_visibility_packets(
                 version,
@@ -873,7 +949,11 @@ mod tests {
         let existing = vec![make_session(2, 2, 20), make_session(3, 3, 30)];
         let plan = join_plan(new, existing);
         let packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_21);
-        assert_eq!(packets.len(), 8, "4 packets per existing player * 2 players");
+        assert_eq!(
+            packets.len(),
+            8,
+            "4 packets per existing player * 2 players"
+        );
     }
 
     #[test]
@@ -889,23 +969,76 @@ mod tests {
             tail_bytes: &'static [u8],
         }
         let cases = [
-            Case { version: ProtocolVersion::V1_20_2, entity_id: 400, len: 53, type_offset: 18, type_bytes: &[0x7a],       tail_offset: 46, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
-            Case { version: ProtocolVersion::V1_20_3, entity_id: 400, len: 53, type_offset: 18, type_bytes: &[0x7c],       tail_offset: 45, tail_bytes: &[64] },
-            Case { version: ProtocolVersion::V1_20_5, entity_id: 400, len: 54, type_offset: 18, type_bytes: &[0x80, 0x01], tail_offset: 47, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
-            Case { version: ProtocolVersion::V1_21,   entity_id: 400, len: 54, type_offset: 18, type_bytes: &[0x80, 0x01], tail_offset: 47, tail_bytes: &[0, 0, 0, 0, 0, 0, 0] },
+            Case {
+                version: ProtocolVersion::V1_20_2,
+                entity_id: 400,
+                len: 53,
+                type_offset: 18,
+                type_bytes: &[0x7a],
+                tail_offset: 46,
+                tail_bytes: &[0, 0, 0, 0, 0, 0, 0],
+            },
+            Case {
+                version: ProtocolVersion::V1_20_3,
+                entity_id: 400,
+                len: 53,
+                type_offset: 18,
+                type_bytes: &[0x7c],
+                tail_offset: 45,
+                tail_bytes: &[64],
+            },
+            Case {
+                version: ProtocolVersion::V1_20_5,
+                entity_id: 400,
+                len: 54,
+                type_offset: 18,
+                type_bytes: &[0x80, 0x01],
+                tail_offset: 47,
+                tail_bytes: &[0, 0, 0, 0, 0, 0, 0],
+            },
+            Case {
+                version: ProtocolVersion::V1_21,
+                entity_id: 400,
+                len: 54,
+                type_offset: 18,
+                type_bytes: &[0x80, 0x01],
+                tail_offset: 47,
+                tail_bytes: &[0, 0, 0, 0, 0, 0, 0],
+            },
             // V26_1: entity_id=1 is a 1-byte VarInt so type lands at offset 17
-            Case { version: ProtocolVersion::V26_1,   entity_id: 1,   len: 48, type_offset: 17, type_bytes: &[0x9b, 0x01], tail_offset: 43, tail_bytes: &[0, 0, 64, 64, 0] },
+            Case {
+                version: ProtocolVersion::V26_1,
+                entity_id: 1,
+                len: 48,
+                type_offset: 17,
+                type_bytes: &[0x9b, 0x01],
+                tail_offset: 43,
+                tail_bytes: &[0, 0, 64, 64, 0],
+            },
         ];
 
         for case in &cases {
-            let plan = join_plan(make_session(1, 1, 300), vec![make_session(2, 2, case.entity_id)]);
+            let plan = join_plan(
+                make_session(1, 1, 300),
+                vec![make_session(2, 2, case.entity_id)],
+            );
             let mut packets = join_visibility_packets_for_newcomer(&plan, case.version);
             let raw = packets.remove(1).encode_packet(case.version).unwrap();
             let data = raw.data();
             assert_eq!(raw.packet_id(), Some(1), "{:?} packet_id", case.version);
             assert_eq!(data.len(), case.len, "{:?} data len", case.version);
-            assert_eq!(&data[case.type_offset..case.type_offset + case.type_bytes.len()], case.type_bytes, "{:?} entity type", case.version);
-            assert_eq!(&data[case.tail_offset..case.tail_offset + case.tail_bytes.len()], case.tail_bytes, "{:?} tail", case.version);
+            assert_eq!(
+                &data[case.type_offset..case.type_offset + case.type_bytes.len()],
+                case.type_bytes,
+                "{:?} entity type",
+                case.version
+            );
+            assert_eq!(
+                &data[case.tail_offset..case.tail_offset + case.tail_bytes.len()],
+                case.tail_bytes,
+                "{:?} tail",
+                case.version
+            );
         }
     }
 
@@ -950,9 +1083,9 @@ mod tests {
         // (version, expected_packet_id, expected_data_len, has_0xff_metadata_terminator)
         for (version, expected_id, expected_len, has_terminator) in [
             (ProtocolVersion::V1_12_2, 5u8, 44usize, true),
-            (ProtocolVersion::V1_14_4, 5,   44,       true),
-            (ProtocolVersion::V1_19_4, 3,   43,       false),
-            (ProtocolVersion::V1_20,   3,   43,       false),
+            (ProtocolVersion::V1_14_4, 5, 44, true),
+            (ProtocolVersion::V1_19_4, 3, 43, false),
+            (ProtocolVersion::V1_20, 3, 43, false),
         ] {
             let plan = join_plan(make_session(1, 1, 10), vec![make_session(2, 2, 20)]);
             let mut packets = join_visibility_packets_for_newcomer(&plan, version);
@@ -960,7 +1093,11 @@ mod tests {
             assert_eq!(raw.packet_id(), Some(expected_id), "{version:?} packet_id");
             assert_eq!(raw.data().len(), expected_len, "{version:?} data len");
             if has_terminator {
-                assert_eq!(raw.data()[expected_len - 1], 0xFF, "{version:?} metadata terminator");
+                assert_eq!(
+                    raw.data()[expected_len - 1],
+                    0xFF,
+                    "{version:?} metadata terminator"
+                );
             }
         }
     }

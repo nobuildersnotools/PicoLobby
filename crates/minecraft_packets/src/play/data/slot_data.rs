@@ -293,116 +293,93 @@ mod tests {
     }
 
     #[test]
-    fn empty_slot_pre_1_13_is_minus_one_short() {
+    fn empty_slot_wire_format_per_era() {
+        // Pre-1.13 and 1.13/1.13.1: Short -1.  1.13.2–1.20.4: bool false.  1.20.5+: VarInt 0.
+        let cases: &[(ProtocolVersion, &[u8])] = &[
+            (ProtocolVersion::V1_12_2, &[0xFF, 0xFF]),
+            (ProtocolVersion::V1_13_1, &[0xFF, 0xFF]),
+            (ProtocolVersion::V1_13_2, &[0x00]),
+            (ProtocolVersion::V1_20_5, &[0x00]),
+        ];
         let slot = LobbySlot::empty();
-        let bytes = encode(&slot, ProtocolVersion::V1_12_2);
-        assert_eq!(&bytes, &[0xFF, 0xFF]); // -1i16 big-endian
+        for &(version, expected) in cases {
+            assert_eq!(&encode(&slot, version), expected, "{version:?}");
+        }
     }
 
     #[test]
-    fn empty_slot_modern_is_false_byte() {
-        let slot = LobbySlot::empty();
-        let bytes = encode(&slot, ProtocolVersion::V1_13_2);
-        assert_eq!(&bytes, &[0x00]); // bool false
+    fn non_empty_slot_pre_1_13_encodes_short_id_and_damage() {
+        // compass ID 345 = 0x0159; damage field is always 0.
+        let bytes = encode(
+            &LobbySlot::new(345, 1, None, Vec::new()),
+            ProtocolVersion::V1_12_2,
+        );
+        assert_eq!(&bytes[..6], &[0x01, 0x59, 0x01, 0x00, 0x00, 0x00]);
     }
 
     #[test]
-    fn empty_slot_v1_13_is_minus_one_short() {
-        let slot = LobbySlot::empty();
-        let bytes = encode(&slot, ProtocolVersion::V1_13_1);
-        assert_eq!(&bytes, &[0xFF, 0xFF]); // -1i16 big-endian
-    }
-
-    #[test]
-    fn empty_slot_structured_is_zero_varint() {
-        let slot = LobbySlot::empty();
-        let bytes = encode(&slot, ProtocolVersion::V1_20_5);
-        assert_eq!(&bytes, &[0x00]); // VarInt 0
-    }
-
-    #[test]
-    fn non_empty_slot_pre_1_13_encodes_short_id() {
-        // compass = item ID 345 = 0x0159
-        let slot = LobbySlot::new(345, 1, None, Vec::new());
-        let bytes = encode(&slot, ProtocolVersion::V1_12_2);
-        assert_eq!(bytes[0], 0x01); // high byte of 345
-        assert_eq!(bytes[1], 0x59); // low byte of 345
-        assert_eq!(bytes[2], 0x01); // count = 1
-        assert_eq!(bytes[3], 0x00); // damage high
-        assert_eq!(bytes[4], 0x00); // damage low
-        assert_eq!(bytes[5], 0x00); // no NBT (TAG_End)
-    }
-
-    #[test]
-    fn non_empty_slot_modern_encodes_bool_varint_count() {
-        // V1_13_2 through V1_20_4 use the legacy bool-present + VarInt-ID format.
-        // item 888 (compass in V1_20): 888 % 128 = 120, 888 / 128 = 6 → [0xF8, 0x06]
-        let slot = LobbySlot::new(888, 1, None, Vec::new());
-        let bytes = encode(&slot, ProtocolVersion::V1_20);
-        assert_eq!(bytes[0], 0x01); // present = true
-        assert_eq!(bytes[1], 0xF8); // VarInt 888 low byte with continuation
-        assert_eq!(bytes[2], 0x06); // VarInt 888 high byte
-        assert_eq!(bytes[3], 0x01); // count = 1
-        assert_eq!(bytes[4], 0x00); // no NBT
-    }
-
-    #[test]
-    fn non_empty_slot_v1_13_encodes_short_id_without_damage() {
-        // compass = item ID 562 in V1_13; 1.13/1.13.1 use flattened IDs but
-        // still encode slot item IDs as shorts.
-        let slot = LobbySlot::new(562, 1, None, Vec::new());
-        let bytes = encode(&slot, ProtocolVersion::V1_13_1);
-        assert_eq!(bytes[0], 0x02); // high byte of 562
-        assert_eq!(bytes[1], 0x32); // low byte of 562
-        assert_eq!(bytes[2], 0x01); // count = 1
-        assert_eq!(bytes[3], 0x00); // no NBT (TAG_End)
+    fn non_empty_slot_v1_13_flat_short_without_damage() {
+        // 1.13/1.13.1: flattened IDs, Short item_id, no damage field.
+        let bytes = encode(
+            &LobbySlot::new(562, 1, None, Vec::new()),
+            ProtocolVersion::V1_13_1,
+        );
+        // 562 = 0x0232; no damage field → 4 bytes total.
+        assert_eq!(&bytes[..4], &[0x02, 0x32, 0x01, 0x00]);
         assert_eq!(bytes.len(), 4);
     }
 
     #[test]
-    fn structured_slot_encodes_count_then_item_id() {
-        // V1_20_5 uses structured components; item_id 888 kept for simplicity.
-        // 888 % 128 = 120 → 0xF8, 888 / 128 = 6 → 0x06
-        let slot = LobbySlot::new(888, 1, None, Vec::new());
-        let bytes = encode(&slot, ProtocolVersion::V1_20_5);
-        assert_eq!(bytes[0], 0x01); // count VarInt = 1
-        assert_eq!(bytes[1], 0xF8); // VarInt 888 low byte with continuation
-        assert_eq!(bytes[2], 0x06); // VarInt 888 high byte
-        // 0 add-components, 0 remove-components
-        assert_eq!(bytes[3], 0x00);
-        assert_eq!(bytes[4], 0x00);
+    fn non_empty_slot_modern_bool_present_varint_id() {
+        // 1.13.2–1.20.4: bool true, VarInt item_id, i8 count.
+        // item 888: VarInt → [0xF8, 0x06]
+        let bytes = encode(
+            &LobbySlot::new(888, 1, None, Vec::new()),
+            ProtocolVersion::V1_20,
+        );
+        assert_eq!(&bytes[..5], &[0x01, 0xF8, 0x06, 0x01, 0x00]);
     }
 
     #[test]
-    fn v1_13_lore_uses_legacy_text_while_name_uses_json() {
+    fn non_empty_slot_structured_encodes_count_then_item_id() {
+        // 1.20.5+: VarInt count, VarInt item_id, add/remove component counts.
+        let bytes = encode(
+            &LobbySlot::new(888, 1, None, Vec::new()),
+            ProtocolVersion::V1_20_5,
+        );
+        assert_eq!(&bytes[..5], &[0x01, 0xF8, 0x06, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn nbt_lore_format_switches_from_legacy_to_json_at_v1_14() {
         let name = parse_mini_message("<bold><gold>Server Selector").unwrap();
         let lore = vec![parse_mini_message("<gray>Right-click").unwrap()];
 
-        let nbt = build_display_nbt_modern(&Some(name), &lore, ProtocolVersion::V1_13_2)
-            .expect("display nbt");
+        // 1.13.2: name is JSON, lore is legacy text.
+        let nbt = build_display_nbt_modern(&Some(name), &lore, ProtocolVersion::V1_13_2).unwrap();
         let display = display_tag(&nbt);
-
-        let name = display.get("Name").and_then(Value::get_str).expect("name");
         assert!(
-            name.contains("\"color\":\"gold\""),
-            "1.13 item names should stay JSON text components"
+            display
+                .get("Name")
+                .and_then(Value::get_str)
+                .unwrap()
+                .contains("\"color\":\"gold\"")
+        );
+        assert_eq!(
+            display.get("Lore").and_then(Value::get_list).unwrap()[0].get_str(),
+            Some("\u{00a7}r\u{00a7}7Right-click")
         );
 
-        let lore = display.get("Lore").and_then(Value::get_list).expect("lore");
-        assert_eq!(lore[0].get_str(), Some("\u{00a7}r\u{00a7}7Right-click"));
-    }
-
-    #[test]
-    fn v1_14_lore_uses_json_text_components() {
-        let lore = vec![parse_mini_message("<gray>Right-click").unwrap()];
-
-        let nbt =
-            build_display_nbt_modern(&None, &lore, ProtocolVersion::V1_14).expect("display nbt");
-        let display = display_tag(&nbt);
-        let lore = display.get("Lore").and_then(Value::get_list).expect("lore");
-        let line = lore[0].get_str().expect("lore line");
-
-        assert!(line.contains("\"color\":\"gray\""));
+        // 1.14+: both name and lore are JSON.
+        let lore2 = vec![parse_mini_message("<gray>Right-click").unwrap()];
+        let nbt2 = build_display_nbt_modern(&None, &lore2, ProtocolVersion::V1_14).unwrap();
+        let display2 = display_tag(&nbt2);
+        assert!(
+            display2.get("Lore").and_then(Value::get_list).unwrap()[0]
+                .get_str()
+                .unwrap()
+                .contains("\"color\":\"gray\"")
+        );
     }
 
     #[test]
@@ -410,15 +387,15 @@ mod tests {
         let name = parse_mini_message("<bold><gold>Server Selector").unwrap();
         let lore = vec![parse_mini_message("<gray>Right-click").unwrap()];
 
-        let nbt = build_display_nbt_legacy(&Some(name), &lore).expect("display nbt");
+        let nbt = build_display_nbt_legacy(&Some(name), &lore).unwrap();
         let display = display_tag(&nbt);
-
         assert_eq!(
             display.get("Name").and_then(Value::get_str),
             Some("\u{00a7}r\u{00a7}6\u{00a7}lServer Selector")
         );
-
-        let lore = display.get("Lore").and_then(Value::get_list).expect("lore");
-        assert_eq!(lore[0].get_str(), Some("\u{00a7}r\u{00a7}7Right-click"));
+        assert_eq!(
+            display.get("Lore").and_then(Value::get_list).unwrap()[0].get_str(),
+            Some("\u{00a7}r\u{00a7}7Right-click")
+        );
     }
 }

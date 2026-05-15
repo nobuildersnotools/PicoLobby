@@ -849,9 +849,15 @@ mod tests {
     #[test]
     fn chat_plan_visibility_rules() {
         assert_eq!(ChatVisibility::from_client_mode(0), ChatVisibility::Full);
-        assert_eq!(ChatVisibility::from_client_mode(1), ChatVisibility::CommandsOnly);
+        assert_eq!(
+            ChatVisibility::from_client_mode(1),
+            ChatVisibility::CommandsOnly
+        );
         assert_eq!(ChatVisibility::from_client_mode(2), ChatVisibility::Hidden);
-        assert_eq!(ChatVisibility::from_client_mode(99), ChatVisibility::Unknown);
+        assert_eq!(
+            ChatVisibility::from_client_mode(99),
+            ChatVisibility::Unknown
+        );
 
         let mut state = LobbyState::new();
         let sender = state.insert(session(Uuid::from_u128(1), "sender"));
@@ -868,9 +874,22 @@ mod tests {
         assert_eq!(plan.sender_session_id, sender.session_id);
         assert_eq!(plan.sender_username, "sender");
         assert_eq!(plan.message, "hello");
-        assert!(plan.recipients.iter().any(|r| r.session_id == sender.session_id));
-        assert!(plan.recipients.iter().any(|r| r.session_id == visible.session_id));
-        assert!(!plan.recipients.iter().any(|r| r.session_id == hidden.session_id));
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == sender.session_id)
+        );
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == visible.session_id)
+        );
+        assert!(
+            !plan
+                .recipients
+                .iter()
+                .any(|r| r.session_id == hidden.session_id)
+        );
     }
 
     #[test]
@@ -881,7 +900,10 @@ mod tests {
         let new_position = LobbyPosition::new(5.0, 6.0, 7.0, 180.0, 12.0);
 
         // simple update_position path
-        assert!(state.update_position(moving.entity_id, LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)));
+        assert!(state.update_position(
+            moving.entity_id,
+            LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)
+        ));
 
         // full movement plan path
         let plan = state
@@ -901,7 +923,10 @@ mod tests {
             }]
         );
         assert_eq!(
-            state.session_by_entity_id(moving.entity_id).unwrap().position,
+            state
+                .session_by_entity_id(moving.entity_id)
+                .unwrap()
+                .position,
             new_position
         );
     }
@@ -913,7 +938,11 @@ mod tests {
         let recipient = state.insert(session(Uuid::from_u128(2), "recipient"));
 
         // no plan when state is unchanged
-        assert!(state.update_crouching_with_metadata_plan(moving.entity_id, false).is_none());
+        assert!(
+            state
+                .update_crouching_with_metadata_plan(moving.entity_id, false)
+                .is_none()
+        );
 
         let plan = state
             .update_crouching_with_metadata_plan(moving.entity_id, true)
@@ -931,13 +960,22 @@ mod tests {
                 protocol_version: ProtocolVersion::V1_20_5,
             }]
         );
-        assert!(state.session_by_entity_id(moving.entity_id).unwrap().crouching);
+        assert!(
+            state
+                .session_by_entity_id(moving.entity_id)
+                .unwrap()
+                .crouching
+        );
     }
 
     #[test]
     fn join_plan_structure_and_exclusions() {
         // unknown session returns None
-        assert!(LobbyState::new().plan_join_visibility(LobbySessionId::new(99)).is_none());
+        assert!(
+            LobbyState::new()
+                .plan_join_visibility(LobbySessionId::new(99))
+                .is_none()
+        );
 
         // solo player: empty existing lists
         let mut state = LobbyState::new();
@@ -958,8 +996,17 @@ mod tests {
         let third = state.insert(session(Uuid::from_u128(3), "third"));
         let plan = state.plan_join_visibility(second.session_id).unwrap();
         assert_eq!(plan.existing_sessions.len(), 2);
-        assert!(!plan.existing_recipients.iter().any(|r| r.session_id == second.session_id));
-        let ids: Vec<_> = plan.existing_recipients.iter().map(|r| r.session_id).collect();
+        assert!(
+            !plan
+                .existing_recipients
+                .iter()
+                .any(|r| r.session_id == second.session_id)
+        );
+        let ids: Vec<_> = plan
+            .existing_recipients
+            .iter()
+            .map(|r| r.session_id)
+            .collect();
         assert!(ids.contains(&solo.session_id));
         assert!(ids.contains(&third.session_id));
     }

@@ -62,36 +62,31 @@ mod tests {
     }
 
     #[test]
-    fn v1_8_uses_byte_window_id_string_type_and_num_slots() {
-        let bytes = encode(make_packet(), ProtocolVersion::V1_8);
-        // [0x01 (window_id byte), then string "minecraft:chest" prefixed, then Chat, then 27]
-        assert_eq!(bytes[0], 0x01); // window_id as u8
-        // Last byte should be 27 (num_slots)
-        assert_eq!(bytes[bytes.len() - 1], 27);
+    fn pre_1_14_appends_string_type_and_num_slots_27() {
+        // 1.8 uses u8 window_id; 1.9–1.13 use VarInt — both end with the 27-slot count byte.
+        for version in [ProtocolVersion::V1_8, ProtocolVersion::V1_12_2] {
+            let bytes = encode(make_packet(), version);
+            assert_eq!(bytes[0], 0x01, "window_id for {version:?}");
+            assert_eq!(
+                bytes[bytes.len() - 1],
+                27,
+                "trailing slot count for {version:?}"
+            );
+        }
     }
 
     #[test]
-    fn v1_12_2_uses_varint_window_id_string_type_and_num_slots() {
-        let bytes = encode(make_packet(), ProtocolVersion::V1_12_2);
-        // VarInt(1) = 0x01
-        assert_eq!(bytes[0], 0x01);
-        assert_eq!(bytes[bytes.len() - 1], 27);
-    }
-
-    #[test]
-    fn v1_14_uses_varint_type_id_and_no_num_slots() {
-        let bytes = encode(make_packet(), ProtocolVersion::V1_14);
-        // VarInt(1) window_id, VarInt(2) type_id, Chat title
-        assert_eq!(bytes[0], 0x01); // window_id
-        assert_eq!(bytes[1], 0x02); // generic_9x3 type id
-        // Last byte should NOT be 27 (no num_slots in 1.14+)
-        assert_ne!(bytes[bytes.len() - 1], 27);
-    }
-
-    #[test]
-    fn v1_20_5_uses_varint_type_id() {
-        let bytes = encode(make_packet(), ProtocolVersion::V1_20_5);
-        assert_eq!(bytes[0], 0x01); // window_id
-        assert_eq!(bytes[1], 0x02); // generic_9x3
+    fn v1_14_and_later_uses_varint_type_id_without_slot_count() {
+        // 1.14+: VarInt window_id, VarInt(2) = generic_9x3, Chat title — no trailing slot count.
+        for version in [ProtocolVersion::V1_14, ProtocolVersion::V1_20_5] {
+            let bytes = encode(make_packet(), version);
+            assert_eq!(bytes[0], 0x01, "window_id for {version:?}");
+            assert_eq!(bytes[1], 0x02, "generic_9x3 type id for {version:?}");
+            assert_ne!(
+                bytes[bytes.len() - 1],
+                27,
+                "must not have slot count for {version:?}"
+            );
+        }
     }
 }

@@ -211,18 +211,18 @@ mod tests {
     fn compass_id_per_version_bucket() {
         let sel = selector("minecraft:compass");
         for (version, expected) in [
-            (ProtocolVersion::V1_12_2, 345),  // pre-1.13 legacy numeric
-            (ProtocolVersion::V1_13,   562),
+            (ProtocolVersion::V1_12_2, 345), // pre-1.13 legacy numeric
+            (ProtocolVersion::V1_13, 562),
             (ProtocolVersion::V1_13_2, 567),
-            (ProtocolVersion::V1_14,   621),
+            (ProtocolVersion::V1_14, 621),
             (ProtocolVersion::V1_15_2, 621),
-            (ProtocolVersion::V1_16,   683),
+            (ProtocolVersion::V1_16, 683),
             (ProtocolVersion::V1_19_3, 861),
             (ProtocolVersion::V1_19_4, 884),
             (ProtocolVersion::V1_20_2, 888),
             (ProtocolVersion::V1_20_3, 925),
             (ProtocolVersion::V1_20_5, 928),
-            (ProtocolVersion::V1_21,   928),
+            (ProtocolVersion::V1_21, 928),
             (ProtocolVersion::V1_21_4, 961),
             (ProtocolVersion::V1_21_6, 989),
         ] {
@@ -244,10 +244,18 @@ mod tests {
     fn hotbar_packet_reflects_item_resolution() {
         let unknown = selector("minecraft:unknown_item_xyz");
         assert!(unknown.resolve_item_id(ProtocolVersion::V1_21).is_none());
-        assert!(unknown.build_hotbar_packet(ProtocolVersion::V1_21).is_none());
+        assert!(
+            unknown
+                .build_hotbar_packet(ProtocolVersion::V1_21)
+                .is_none()
+        );
 
         let compass = selector("minecraft:compass");
-        assert!(compass.build_hotbar_packet(ProtocolVersion::V1_21).is_some());
+        assert!(
+            compass
+                .build_hotbar_packet(ProtocolVersion::V1_21)
+                .is_some()
+        );
     }
 
     // ── selector menu tests ───────────────────────────────────────────────────
@@ -305,10 +313,10 @@ mod tests {
         let version = ProtocolVersion::V1_21;
         // shift-click (mode 1), drag (mode 5), out-of-range slot, empty slot
         for pkt in [
-            make_click(0, 0, 1, 1),   // shift
-            make_click(0, 0, 5, 1),   // drag
-            make_click(27, 0, 0, 1),  // player inventory slot
-            make_click(5, 0, 0, 1),   // empty menu slot
+            make_click(0, 0, 1, 1),  // shift
+            make_click(0, 0, 5, 1),  // drag
+            make_click(27, 0, 0, 1), // player inventory slot
+            make_click(5, 0, 0, 1),  // empty menu slot
         ] {
             assert!(
                 matches!(state.classify(&pkt, version), SelectorClick::RequiresResync),
@@ -331,7 +339,7 @@ mod tests {
     #[test]
     fn classify_stale_state_id_version_behavior() {
         let state = open_state_with_two_dests(); // state_id = 1
-        let stale = make_click(0, 0, 0, 0);     // state_id = 0
+        let stale = make_click(0, 0, 0, 0); // state_id = 0
 
         // 1.17.1+: stale state_id → resync
         assert!(matches!(

@@ -1119,8 +1119,14 @@ mod tests {
             LobbyDestination::new("creative", "Creative", "creative-1"),
         ]);
 
-        assert_eq!(server.resolve_lobby_destination("survival").unwrap().server, "survival-1");
-        assert_eq!(server.resolve_lobby_destination("creative").unwrap().server, "creative-1");
+        assert_eq!(
+            server.resolve_lobby_destination("survival").unwrap().server,
+            "survival-1"
+        );
+        assert_eq!(
+            server.resolve_lobby_destination("creative").unwrap().server,
+            "creative-1"
+        );
         assert!(matches!(
             server.resolve_lobby_destination("minigames"),
             Err(NavigationError::UnknownDestination(id)) if id == "minigames"
@@ -1140,7 +1146,11 @@ mod tests {
         let mut builder = ServerState::builder();
         builder.set_lobby_enabled(true);
         builder
-            .set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "survival-1")])
+            .set_lobby_destinations(vec![LobbyDestination::new(
+                "survival",
+                "Survival",
+                "survival-1",
+            )])
             .unwrap();
         builder
             .set_lobby_npcs(vec![crate::configuration::lobby::LobbyNpcConfig {

@@ -231,72 +231,72 @@ mod tests {
     }
 
     #[test]
-    fn player_baseline_metadata_encodes_base_flags_and_skin_layers_for_v1_21() {
-        let data = encode(
-            SetEntityMetadataPacket::player_baseline(300),
-            ProtocolVersion::V1_21,
-        );
-
-        assert_eq!(data, &[0xac, 0x02, 0, 0, 0, 6, 21, 0, 17, 0, 0x7f, 0xff]);
+    fn baseline_metadata_skin_parts_index_shifts_at_v1_21_9() {
+        // V1_21 and V1_20_5 both use skin-parts index 17, pose type-id 21.
+        // V26_1 (≥1.21.9) uses index 16, pose type-id 20.
+        let cases: &[(ProtocolVersion, &[u8])] = &[
+            (
+                ProtocolVersion::V1_21,
+                &[0xac, 0x02, 0, 0, 0, 6, 21, 0, 17, 0, 0x7f, 0xff],
+            ),
+            (
+                ProtocolVersion::V26_1,
+                &[0xac, 0x02, 0, 0, 0, 6, 20, 0, 16, 0, 0x7f, 0xff],
+            ),
+        ];
+        for &(version, expected) in cases {
+            assert_eq!(
+                encode(SetEntityMetadataPacket::player_baseline(300), version),
+                expected,
+                "{version:?}"
+            );
+        }
     }
 
     #[test]
-    fn player_baseline_metadata_uses_latest_skin_parts_index() {
-        let data = encode(
-            SetEntityMetadataPacket::player_baseline(300),
-            ProtocolVersion::V26_1,
-        );
-
-        assert_eq!(data, &[0xac, 0x02, 0, 0, 0, 6, 20, 0, 16, 0, 0x7f, 0xff]);
+    fn crouching_metadata_encodes_base_flag_and_pose() {
+        // V1_20_5 and V1_21 share the same encoding; V26_1 shifts the indices.
+        let cases: &[(ProtocolVersion, &[u8])] = &[
+            (
+                ProtocolVersion::V1_20_5,
+                &[0xac, 0x02, 0, 0, 0x02, 6, 21, 5, 17, 0, 0x7f, 0xff],
+            ),
+            (
+                ProtocolVersion::V1_21,
+                &[0xac, 0x02, 0, 0, 0x02, 6, 21, 5, 17, 0, 0x7f, 0xff],
+            ),
+            (
+                ProtocolVersion::V26_1,
+                &[0xac, 0x02, 0, 0, 0x02, 6, 20, 5, 16, 0, 0x7f, 0xff],
+            ),
+        ];
+        for &(version, expected) in cases {
+            assert_eq!(
+                encode(
+                    SetEntityMetadataPacket::player(300, EntityBaseFlags::crouching()),
+                    version
+                ),
+                expected,
+                "{version:?}"
+            );
+        }
     }
 
     #[test]
-    fn player_metadata_can_encode_crouching_base_flag() {
-        let data = encode(
-            SetEntityMetadataPacket::player(300, EntityBaseFlags::crouching()),
-            ProtocolVersion::V1_21,
-        );
-
-        assert_eq!(data, &[0xac, 0x02, 0, 0, 0x02, 6, 21, 5, 17, 0, 0x7f, 0xff]);
-    }
-
-    #[test]
-    fn v1_20_5_player_metadata_encodes_crouching_pose() {
-        let data = encode(
-            SetEntityMetadataPacket::player(300, EntityBaseFlags::crouching()),
-            ProtocolVersion::V1_20_5,
-        );
-
-        assert_eq!(data, &[0xac, 0x02, 0, 0, 0x02, 6, 21, 5, 17, 0, 0x7f, 0xff]);
-    }
-
-    #[test]
-    fn latest_player_metadata_encodes_crouching_pose() {
-        let data = encode(
-            SetEntityMetadataPacket::player(300, EntityBaseFlags::crouching()),
-            ProtocolVersion::V26_1,
-        );
-
-        assert_eq!(data, &[0xac, 0x02, 0, 0, 0x02, 6, 20, 5, 16, 0, 0x7f, 0xff]);
-    }
-
-    #[test]
-    fn player_baseline_metadata_encodes_legacy_byte_metadata_for_v1_8() {
+    fn v1_8_uses_legacy_byte_metadata() {
         let data = encode(
             SetEntityMetadataPacket::player_baseline(300),
             ProtocolVersion::V1_8,
         );
-
         assert_eq!(data, &[0xac, 0x02, 0, 0, 10, 0x7f, 0x7f]);
     }
 
     #[test]
-    fn player_metadata_encodes_legacy_v1_7_entity_id_and_base_flags() {
+    fn v1_7_uses_big_endian_i32_entity_id() {
         let data = encode(
             SetEntityMetadataPacket::player(300, EntityBaseFlags::crouching()),
             ProtocolVersion::V1_7_2,
         );
-
         assert_eq!(data, &[0, 0, 1, 44, 0, 0x02, 0x7f]);
     }
 }
