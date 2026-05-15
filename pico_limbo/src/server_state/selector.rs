@@ -208,51 +208,24 @@ mod tests {
     }
 
     #[test]
-    fn compass_resolves_for_v1_21() {
+    fn compass_id_per_version_bucket() {
         let sel = selector("minecraft:compass");
-        assert!(
-            sel.resolve_item_id(ProtocolVersion::V1_21).is_some(),
-            "expected compass id for V1_21"
-        );
-    }
-
-    #[test]
-    fn compass_resolves_to_adjusted_v1_21_4_id() {
-        let sel = selector("minecraft:compass");
-        let id = sel.resolve_item_id(ProtocolVersion::V1_21_4);
-        assert_eq!(id, Some(961), "V1_21_4 compass = 961");
-    }
-
-    #[test]
-    fn compass_resolves_to_adjusted_v1_21_6_id() {
-        let sel = selector("minecraft:compass");
-        let id = sel.resolve_item_id(ProtocolVersion::V1_21_6);
-        assert_eq!(id, Some(989), "V1_21_6 compass = 989");
-    }
-
-    #[test]
-    fn compass_resolves_for_v1_16() {
-        let sel = selector("minecraft:compass");
-        let id = sel.resolve_item_id(ProtocolVersion::V1_16);
-        assert_eq!(id, Some(683), "V1_16 compass = 683");
-    }
-
-    #[test]
-    fn compass_resolves_for_missing_registry_versions() {
-        let sel = selector("minecraft:compass");
-        let cases = [
-            (ProtocolVersion::V1_13, 562),
+        for (version, expected) in [
+            (ProtocolVersion::V1_12_2, 345),  // pre-1.13 legacy numeric
+            (ProtocolVersion::V1_13,   562),
             (ProtocolVersion::V1_13_2, 567),
-            (ProtocolVersion::V1_14, 621),
+            (ProtocolVersion::V1_14,   621),
             (ProtocolVersion::V1_15_2, 621),
+            (ProtocolVersion::V1_16,   683),
             (ProtocolVersion::V1_19_3, 861),
             (ProtocolVersion::V1_19_4, 884),
             (ProtocolVersion::V1_20_2, 888),
             (ProtocolVersion::V1_20_3, 925),
             (ProtocolVersion::V1_20_5, 928),
-        ];
-
-        for (version, expected) in cases {
+            (ProtocolVersion::V1_21,   928),
+            (ProtocolVersion::V1_21_4, 961),
+            (ProtocolVersion::V1_21_6, 989),
+        ] {
             assert_eq!(
                 sel.resolve_item_id(version),
                 Some(expected),
@@ -268,28 +241,13 @@ mod tests {
     }
 
     #[test]
-    fn compass_resolves_for_pre_1_13() {
-        let sel = selector("minecraft:compass");
-        let id = sel.resolve_item_id(ProtocolVersion::V1_12_2);
-        assert_eq!(id, Some(345), "pre-1.13 compass = 345");
-    }
+    fn hotbar_packet_reflects_item_resolution() {
+        let unknown = selector("minecraft:unknown_item_xyz");
+        assert!(unknown.resolve_item_id(ProtocolVersion::V1_21).is_none());
+        assert!(unknown.build_hotbar_packet(ProtocolVersion::V1_21).is_none());
 
-    #[test]
-    fn unknown_item_returns_none() {
-        let sel = selector("minecraft:unknown_item_xyz");
-        assert!(sel.resolve_item_id(ProtocolVersion::V1_21).is_none());
-    }
-
-    #[test]
-    fn hotbar_packet_is_none_for_unknown_item() {
-        let sel = selector("minecraft:unknown_item_xyz");
-        assert!(sel.build_hotbar_packet(ProtocolVersion::V1_21).is_none());
-    }
-
-    #[test]
-    fn hotbar_packet_is_some_for_compass() {
-        let sel = selector("minecraft:compass");
-        assert!(sel.build_hotbar_packet(ProtocolVersion::V1_21).is_some());
+        let compass = selector("minecraft:compass");
+        assert!(compass.build_hotbar_packet(ProtocolVersion::V1_21).is_some());
     }
 
     // ── selector menu tests ───────────────────────────────────────────────────
@@ -299,22 +257,15 @@ mod tests {
     }
 
     #[test]
-    fn build_selector_menu_maps_destinations_to_sequential_slots() {
+    fn build_selector_menu_slot_layout() {
         let dests = vec![dest("survival"), dest("creative"), dest("minigames")];
         let state = build_selector_menu(1, &dests, ProtocolVersion::V1_21);
 
         assert_eq!(state.slot_map[0], Some("survival".to_string()));
         assert_eq!(state.slot_map[1], Some("creative".to_string()));
         assert_eq!(state.slot_map[2], Some("minigames".to_string()));
-        assert!(state.slot_map[3].is_none());
         assert_eq!(state.slots.len(), 27);
-    }
-
-    #[test]
-    fn build_selector_menu_fills_remaining_slots_with_empty() {
-        let dests = vec![dest("a"), dest("b")];
-        let state = build_selector_menu(1, &dests, ProtocolVersion::V1_21);
-        for i in 2..27 {
+        for i in 3..27 {
             assert!(state.slot_map[i].is_none());
             assert_eq!(state.slots[i].item_id(), -1);
         }
@@ -336,91 +287,60 @@ mod tests {
     }
 
     #[test]
-    fn classify_left_click_on_destination_slot_is_select() {
+    fn classify_clicks_select_destination_slot() {
         let state = open_state_with_two_dests();
-        let pkt = make_click(0, 0, 0, 1);
         assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
+            state.classify(&make_click(0, 0, 0, 1), ProtocolVersion::V1_21),
             SelectorClick::Select { slot_index: 0 }
         ));
-    }
-
-    #[test]
-    fn classify_right_click_on_destination_slot_is_select() {
-        let state = open_state_with_two_dests();
-        let pkt = make_click(1, 1, 0, 1);
         assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
+            state.classify(&make_click(1, 1, 0, 1), ProtocolVersion::V1_21),
             SelectorClick::Select { slot_index: 1 }
         ));
     }
 
     #[test]
-    fn classify_shift_click_is_resync() {
+    fn classify_invalid_interactions_require_resync() {
         let state = open_state_with_two_dests();
-        let pkt = make_click(0, 0, 1, 1);
-        assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
-            SelectorClick::RequiresResync
-        ));
-    }
-
-    #[test]
-    fn classify_drag_is_resync() {
-        let state = open_state_with_two_dests();
-        let pkt = make_click(0, 0, 5, 1);
-        assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
-            SelectorClick::RequiresResync
-        ));
-    }
-
-    #[test]
-    fn classify_player_inventory_slot_is_resync() {
-        let state = open_state_with_two_dests();
-        let pkt = make_click(27, 0, 0, 1);
-        assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
-            SelectorClick::RequiresResync
-        ));
-    }
-
-    #[test]
-    fn classify_empty_slot_is_resync() {
-        let state = open_state_with_two_dests();
-        let pkt = make_click(5, 0, 0, 1);
-        assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
-            SelectorClick::RequiresResync
-        ));
+        let version = ProtocolVersion::V1_21;
+        // shift-click (mode 1), drag (mode 5), out-of-range slot, empty slot
+        for pkt in [
+            make_click(0, 0, 1, 1),   // shift
+            make_click(0, 0, 5, 1),   // drag
+            make_click(27, 0, 0, 1),  // player inventory slot
+            make_click(5, 0, 0, 1),   // empty menu slot
+        ] {
+            assert!(
+                matches!(state.classify(&pkt, version), SelectorClick::RequiresResync),
+                "expected RequiresResync for pkt slot={} mode={}",
+                pkt.slot,
+                pkt.mode
+            );
+        }
     }
 
     #[test]
     fn classify_outside_window_is_ignored() {
         let state = open_state_with_two_dests();
-        let pkt = make_click(-999, 0, 0, 1);
         assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_21),
+            state.classify(&make_click(-999, 0, 0, 1), ProtocolVersion::V1_21),
             SelectorClick::Ignored
         ));
     }
 
     #[test]
-    fn classify_stale_state_id_is_resync_for_1_17_1_plus() {
+    fn classify_stale_state_id_version_behavior() {
         let state = open_state_with_two_dests(); // state_id = 1
-        let pkt = make_click(0, 0, 0, 0); // stale state_id = 0
+        let stale = make_click(0, 0, 0, 0);     // state_id = 0
+
+        // 1.17.1+: stale state_id → resync
         assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_17_1),
+            state.classify(&stale, ProtocolVersion::V1_17_1),
             SelectorClick::RequiresResync
         ));
-    }
-
-    #[test]
-    fn classify_stale_state_id_is_ignored_for_pre_1_17_1() {
-        let state = open_state_with_two_dests(); // state_id = 1
-        let pkt = make_click(0, 0, 0, 0); // state_id = 0, but pre-1.17.1
+        // pre-1.17.1: state_id ignored → select
         assert!(matches!(
-            state.classify(&pkt, ProtocolVersion::V1_12_2),
+            state.classify(&stale, ProtocolVersion::V1_12_2),
             SelectorClick::Select { slot_index: 0 }
         ));
     }
