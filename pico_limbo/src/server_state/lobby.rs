@@ -1,7 +1,7 @@
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
 use net::raw_packet::RawPacket;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -123,6 +123,66 @@ impl LobbySession {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LobbyNpcId(String);
+
+impl LobbyNpcId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum LobbyNpcKind {
+    Player,
+}
+
+#[derive(Clone)]
+pub struct LobbyNpc {
+    pub id: LobbyNpcId,
+    pub destination_id: String,
+    pub name: String,
+    pub uuid: Uuid,
+    pub entity_id: EntityId,
+    pub position: LobbyPosition,
+    pub kind: LobbyNpcKind,
+}
+
+impl LobbyNpc {
+    pub fn player(
+        id: impl Into<String>,
+        destination_id: impl Into<String>,
+        name: impl Into<String>,
+        position: LobbyPosition,
+    ) -> Self {
+        let id = id.into();
+        Self {
+            uuid: deterministic_npc_uuid(&id),
+            id: LobbyNpcId::new(id),
+            destination_id: destination_id.into(),
+            name: name.into(),
+            entity_id: EntityId::new(0),
+            position,
+            kind: LobbyNpcKind::Player,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LobbyNpcSpawnPlan {
+    pub npcs: Vec<LobbyNpc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyNpcInteraction {
+    pub npc_id: LobbyNpcId,
+    pub destination_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub struct LobbyRecipient {
@@ -176,6 +236,8 @@ pub struct LobbyChatPlan {
 pub struct LobbyState {
     next_session_id: u64,
     next_entity_id: i32,
+    npcs: Vec<LobbyNpc>,
+    npc_entity_to_index: HashMap<EntityId, usize>,
     sessions_by_uuid: HashMap<Uuid, LobbySession>,
     entity_to_uuid: HashMap<EntityId, Uuid>,
     session_to_uuid: HashMap<LobbySessionId, Uuid>,
@@ -184,14 +246,86 @@ pub struct LobbyState {
 
 impl LobbyState {
     pub fn new() -> Self {
-        Self {
+        Self::with_npcs(Vec::new())
+    }
+
+    pub fn with_npcs(mut npcs: Vec<LobbyNpc>) -> Self {
+        let mut state = Self {
             next_session_id: LobbySessionId::FIRST,
             next_entity_id: EntityId::FIRST_PLAYER_ID,
+            npcs: Vec::new(),
+            npc_entity_to_index: HashMap::new(),
             sessions_by_uuid: HashMap::new(),
             entity_to_uuid: HashMap::new(),
             session_to_uuid: HashMap::new(),
             broadcast_senders: HashMap::new(),
+        };
+
+        for npc in &mut npcs {
+            npc.entity_id = state.allocate_entity_id();
         }
+        state.npc_entity_to_index = npcs
+            .iter()
+            .enumerate()
+            .map(|(index, npc)| (npc.entity_id, index))
+            .collect();
+        state.npcs = npcs;
+        state
+    }
+
+    pub fn validate_npcs(npcs: &[LobbyNpc]) -> Result<(), LobbyNpcValidationError> {
+        let mut ids = HashSet::new();
+        for npc in npcs {
+            if npc.id.as_str().trim().is_empty() {
+                return Err(LobbyNpcValidationError::EmptyId);
+            }
+            if !ids.insert(npc.id.clone()) {
+                return Err(LobbyNpcValidationError::DuplicateId(
+                    npc.id.as_str().to_string(),
+                ));
+            }
+            if npc.destination_id.trim().is_empty() {
+                return Err(LobbyNpcValidationError::EmptyDestination(
+                    npc.id.as_str().to_string(),
+                ));
+            }
+            if npc.name.trim().is_empty() {
+                return Err(LobbyNpcValidationError::EmptyName(
+                    npc.id.as_str().to_string(),
+                ));
+            }
+            if npc.name.chars().count() > 16 {
+                return Err(LobbyNpcValidationError::NameTooLong(
+                    npc.id.as_str().to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn plan_npc_spawn(&self) -> LobbyNpcSpawnPlan {
+        LobbyNpcSpawnPlan {
+            npcs: self.npcs.clone(),
+        }
+    }
+
+    pub fn plan_npc_interaction(
+        &self,
+        target_entity_id: EntityId,
+        player_position: LobbyPosition,
+        max_distance: f64,
+    ) -> Option<LobbyNpcInteraction> {
+        let npc = self
+            .npc_entity_to_index
+            .get(&target_entity_id)
+            .and_then(|index| self.npcs.get(*index))?;
+        if !positions_within(player_position, npc.position, max_distance) {
+            return None;
+        }
+        Some(LobbyNpcInteraction {
+            npc_id: npc.id.clone(),
+            destination_id: npc.destination_id.clone(),
+        })
     }
 
     pub fn insert(&mut self, mut session: LobbySession) -> LobbySession {
@@ -451,6 +585,36 @@ impl LobbyState {
     }
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum LobbyNpcValidationError {
+    #[error("lobby NPC id cannot be empty")]
+    EmptyId,
+    #[error("lobby NPC '{0}' is defined more than once")]
+    DuplicateId(String),
+    #[error("lobby NPC '{0}' has an empty destination")]
+    EmptyDestination(String),
+    #[error("lobby NPC '{0}' has an empty name")]
+    EmptyName(String),
+    #[error("lobby NPC '{0}' has a name longer than 16 characters")]
+    NameTooLong(String),
+}
+
+fn deterministic_npc_uuid(id: &str) -> Uuid {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u128;
+    for byte in id.as_bytes() {
+        hash ^= u128::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013b);
+    }
+    Uuid::from_u128(hash)
+}
+
+fn positions_within(first: LobbyPosition, second: LobbyPosition, max_distance: f64) -> bool {
+    let dx = first.x - second.x;
+    let dy = first.y - second.y;
+    let dz = first.z - second.z;
+    dx.mul_add(dx, dy.mul_add(dy, dz * dz)) <= max_distance * max_distance
+}
+
 impl Default for LobbyPosition {
     fn default() -> Self {
         Self::new(0.0, 0.0, 0.0, 0.0, 0.0)
@@ -477,6 +641,15 @@ mod tests {
         )
     }
 
+    fn npc(id: &str, destination: &str, x: f64) -> LobbyNpc {
+        LobbyNpc::player(
+            id,
+            destination,
+            id,
+            LobbyPosition::new(x, 64.0, 0.0, 180.0, 0.0),
+        )
+    }
+
     #[test]
     fn allocates_unique_entity_ids() {
         let mut state = LobbyState::new();
@@ -486,6 +659,57 @@ mod tests {
         assert_ne!(first.entity_id, second.entity_id);
         assert_eq!(first.entity_id.get(), 1);
         assert_eq!(second.entity_id.get(), 2);
+    }
+
+    #[test]
+    fn npc_entity_ids_do_not_collide_with_players() {
+        let mut state = LobbyState::with_npcs(vec![npc("survival-npc", "survival", 0.0)]);
+        let first_player = state.insert(session(Uuid::from_u128(1), "player"));
+        let npc_spawn_plan = state.plan_npc_spawn();
+
+        assert_eq!(npc_spawn_plan.npcs.len(), 1);
+        assert_ne!(npc_spawn_plan.npcs[0].entity_id, first_player.entity_id);
+        assert_eq!(npc_spawn_plan.npcs[0].entity_id.get(), 1);
+        assert_eq!(first_player.entity_id.get(), 2);
+    }
+
+    #[test]
+    fn npc_validation_rejects_duplicate_ids() {
+        let err = LobbyState::validate_npcs(&[
+            npc("duplicate", "survival", 0.0),
+            npc("duplicate", "creative", 1.0),
+        ])
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            LobbyNpcValidationError::DuplicateId("duplicate".to_string())
+        );
+    }
+
+    #[test]
+    fn npc_interaction_requires_known_entity_and_range() {
+        let state = LobbyState::with_npcs(vec![npc("survival-npc", "survival", 0.0)]);
+        let target = state.plan_npc_spawn().npcs[0].entity_id;
+
+        let valid =
+            state.plan_npc_interaction(target, LobbyPosition::new(0.0, 64.0, 2.0, 0.0, 0.0), 6.0);
+        assert_eq!(valid.unwrap().destination_id, "survival");
+
+        assert!(
+            state
+                .plan_npc_interaction(target, LobbyPosition::new(0.0, 64.0, 10.0, 0.0, 0.0), 6.0)
+                .is_none()
+        );
+        assert!(
+            state
+                .plan_npc_interaction(
+                    EntityId::new(999),
+                    LobbyPosition::new(0.0, 64.0, 2.0, 0.0, 0.0),
+                    6.0
+                )
+                .is_none()
+        );
     }
 
     #[test]

@@ -1,13 +1,15 @@
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
-use crate::configuration::lobby::SelectorItemConfig;
+use crate::configuration::lobby::{LobbyNpcConfig, SelectorItemConfig};
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
 use base64::{Engine, alphabet, engine};
 pub use lobby::{
     ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
-    LobbyMovementPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId, LobbyState,
+    LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction, LobbyNpcKind, LobbyNpcSpawnPlan,
+    LobbyNpcValidationError, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId,
+    LobbyState,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
@@ -15,7 +17,7 @@ pub use navigation::{LobbyDestination, NavigationError};
 use net::raw_packet::RawPacket;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
-pub use selector::LobbySelector;
+pub use selector::{LobbySelector, OpenSelectorState, SelectorClick, build_selector_menu};
 pub use server_commands::{ServerCommand, ServerCommands};
 use std::fs::File;
 use std::io::Read;
@@ -292,6 +294,10 @@ impl ServerState {
         self.lobby_selector.as_ref()
     }
 
+    pub fn lobby_destinations(&self) -> &[LobbyDestination] {
+        &self.lobby_destinations
+    }
+
     pub fn resolve_lobby_destination(
         &self,
         id: &str,
@@ -300,6 +306,32 @@ impl ServerState {
             .iter()
             .find(|d| d.id.as_str() == id)
             .ok_or_else(|| NavigationError::UnknownDestination(id.to_string()))
+    }
+
+    pub fn plan_lobby_npc_spawn(&self) -> Option<LobbyNpcSpawnPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+        Some(self.lobby_state().plan_npc_spawn())
+    }
+
+    pub fn plan_lobby_npc_interaction(
+        &self,
+        client_state: &ClientState,
+        target_entity_id: i32,
+        max_distance: f64,
+    ) -> Option<LobbyNpcInteraction> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        let (x, y, z) = client_state.position();
+        let (yaw, pitch) = client_state.rotation();
+        self.lobby_state().plan_npc_interaction(
+            EntityId::new(target_entity_id),
+            LobbyPosition::new(x, y, z, yaw, pitch),
+            max_distance,
+        )
     }
 
     pub fn register_lobby_session(&self, client_state: &mut ClientState) -> Option<LobbySession> {
@@ -495,6 +527,7 @@ pub struct ServerStateBuilder {
     lobby_enabled: bool,
     lobby_chat_format: String,
     lobby_destinations: Vec<LobbyDestination>,
+    lobby_npcs: Vec<LobbyNpc>,
     lobby_selector: Option<LobbySelector>,
     show_online_player_count: bool,
     game_mode: GameMode,
@@ -536,6 +569,13 @@ pub enum ServerStateBuilderError {
         "lobby server '{0}' has an empty 'server' name; every [[lobby.servers]] entry must specify a Velocity server name"
     )]
     EmptyServerName(String),
+    #[error("lobby NPC '{npc_id}' references unknown destination '{destination_id}'")]
+    UnknownNpcDestination {
+        npc_id: String,
+        destination_id: String,
+    },
+    #[error(transparent)]
+    LobbyNpcValidation(#[from] LobbyNpcValidationError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -654,6 +694,26 @@ impl ServerStateBuilder {
             }
         }
         self.lobby_destinations = destinations;
+        Ok(self)
+    }
+
+    pub fn set_lobby_npcs(
+        &mut self,
+        configs: Vec<LobbyNpcConfig>,
+    ) -> Result<&mut Self, ServerStateBuilderError> {
+        let npcs = configs
+            .into_iter()
+            .map(|cfg| {
+                LobbyNpc::player(
+                    cfg.id,
+                    cfg.destination,
+                    cfg.name,
+                    LobbyPosition::new(cfg.x, cfg.y, cfg.z, cfg.yaw, cfg.pitch),
+                )
+            })
+            .collect::<Vec<_>>();
+        LobbyState::validate_npcs(&npcs)?;
+        self.lobby_npcs = npcs;
         Ok(self)
     }
 
@@ -847,6 +907,19 @@ impl ServerStateBuilder {
             Some(Arc::new(world))
         };
 
+        for npc in &self.lobby_npcs {
+            if !self
+                .lobby_destinations
+                .iter()
+                .any(|dest| dest.id.as_str() == npc.destination_id)
+            {
+                return Err(ServerStateBuilderError::UnknownNpcDestination {
+                    npc_id: npc.id.as_str().to_string(),
+                    destination_id: npc.destination_id.clone(),
+                });
+            }
+        }
+
         Ok(ServerState {
             forwarding_mode: self.forwarding_mode,
             spawn_dimension: self.dimension.unwrap_or_default(),
@@ -861,7 +934,7 @@ impl ServerStateBuilder {
             lobby_chat_format: self.lobby_chat_format,
             lobby_destinations: self.lobby_destinations,
             lobby_selector: self.lobby_selector,
-            lobby_state: Arc::new(Mutex::new(LobbyState::new())),
+            lobby_state: Arc::new(Mutex::new(LobbyState::with_npcs(self.lobby_npcs))),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
             hardcore: self.hardcore,
@@ -1075,6 +1148,39 @@ mod tests {
         assert!(matches!(
             result,
             Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"
+        ));
+    }
+
+    #[test]
+    fn npc_with_unknown_destination_is_rejected_at_build_time() {
+        let mut builder = ServerState::builder();
+        builder.set_lobby_enabled(true);
+        builder
+            .set_lobby_destinations(vec![LobbyDestination::new(
+                "survival",
+                "Survival",
+                "survival-1",
+            )])
+            .unwrap();
+        builder
+            .set_lobby_npcs(vec![crate::configuration::lobby::LobbyNpcConfig {
+                id: "creative-npc".to_string(),
+                destination: "creative".to_string(),
+                name: "Creative".to_string(),
+                x: 0.0,
+                y: 64.0,
+                z: 0.0,
+                yaw: 180.0,
+                pitch: 0.0,
+            }])
+            .unwrap();
+
+        assert!(matches!(
+            builder.build(),
+            Err(ServerStateBuilderError::UnknownNpcDestination {
+                npc_id,
+                destination_id
+            }) if npc_id == "creative-npc" && destination_id == "creative"
         ));
     }
 }

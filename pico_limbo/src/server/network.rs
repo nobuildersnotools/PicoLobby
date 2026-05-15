@@ -3,6 +3,7 @@ use crate::server::lobby_chat::chat_packets_for_plan;
 use crate::server::lobby_visibility::{
     join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
     leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
+    npc_spawn_packets_for_join,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
@@ -252,6 +253,7 @@ async fn send_join_visibility(
     let Some(join_plan) = server_state_guard.plan_lobby_join(session_id) else {
         return Ok(());
     };
+    let npc_spawn_plan = server_state_guard.plan_lobby_npc_spawn();
     let senders: HashMap<_, _> = server_state_guard
         .collect_lobby_broadcast_senders(&join_plan.existing_recipients)
         .into_iter()
@@ -263,6 +265,14 @@ async fn send_join_visibility(
     for packet in newcomer_packets {
         if let Ok(raw_packet) = packet.encode_packet(newcomer_version) {
             client_data.write_packet(raw_packet).await?;
+        }
+    }
+
+    if let Some(npc_spawn_plan) = npc_spawn_plan {
+        for packet in npc_spawn_packets_for_join(&npc_spawn_plan, newcomer_version) {
+            if let Ok(raw_packet) = packet.encode_packet(newcomer_version) {
+                client_data.write_packet(raw_packet).await?;
+            }
         }
     }
 

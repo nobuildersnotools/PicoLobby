@@ -97,18 +97,17 @@ impl EncodePacket for SpawnPlayerPacket {
             0_i16.encode(writer, version)?;
         }
 
-        // Entity metadata is embedded in the packet payload for 1.8–1.19.3 and was
-        // moved to a separate Set Entity Metadata packet in 1.19.4. Send only the
-        // terminator so the client accepts the packet; the actual metadata follows
-        // as a separate SetEntityMetadata packet.
         if version.is_before_inclusive(ProtocolVersion::V1_8) {
-            // 1.8 metadata terminator index.
+            // 1.8 keeps entity metadata inside the spawn-player payload.
             0x7F_u8.encode(writer, version)?;
-        } else if version.is_before_inclusive(ProtocolVersion::V1_19_3) {
-            // 1.9–1.19.3 metadata terminator index.
+        } else if version.between_inclusive(ProtocolVersion::V1_9, ProtocolVersion::V1_14_4) {
+            // 1.9 through 1.14.4 also carry an inline entity metadata list.
+            // The lobby sends actual player metadata separately, so terminate an
+            // empty modern metadata list here.
             0xFF_u8.encode(writer, version)?;
         }
-        // 1.19.4 through 1.20: no embedded metadata field.
+        // 1.15 through 1.20 have no embedded metadata field; lobby metadata
+        // follows in a separate SetEntityMetadata packet.
 
         Ok(())
     }
@@ -243,13 +242,35 @@ mod tests {
         // uuid as 2 longs (16 bytes)
         // x, y, z as f64 (24 bytes)
         // yaw, pitch (2 bytes)
-        // metadata terminator 0xFF
+        // empty modern metadata list terminator in 1.9 through 1.14.4
         assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
         let x_bytes = f64::to_be_bytes(10.5);
         assert_eq!(data[18..26], x_bytes); // x as f64
         assert_eq!(data[42], 64); // yaw = 90°
         assert_eq!(data[43], 0); // pitch = 0°
         assert_eq!(data[44], 0xFF); // metadata terminator
+        assert_eq!(data.len(), 45);
+    }
+
+    #[test]
+    fn encodes_spawn_player_for_v1_14_4_with_empty_metadata_list() {
+        let data = encode(make_packet(), ProtocolVersion::V1_14_4);
+
+        assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
+        assert_eq!(data[42], 64); // yaw = 90°
+        assert_eq!(data[43], 0); // pitch = 0°
+        assert_eq!(data[44], 0xFF); // metadata terminator
+        assert_eq!(data.len(), 45);
+    }
+
+    #[test]
+    fn encodes_spawn_player_for_v1_15_2_without_metadata_terminator() {
+        let data = encode(make_packet(), ProtocolVersion::V1_15_2);
+
+        assert_eq!(data[0..2], [0xac, 0x02]); // entity_id
+        assert_eq!(data[42], 64); // yaw = 90°
+        assert_eq!(data[43], 0); // pitch = 0°
+        assert_eq!(data.len(), 44); // no metadata terminator
     }
 
     #[test]

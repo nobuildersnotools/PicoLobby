@@ -1,6 +1,7 @@
 use crate::server::game_profile::GameProfile;
 use crate::server_state::{
     ChatVisibility, LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId,
+    OpenSelectorState,
 };
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
@@ -36,6 +37,8 @@ impl Default for ClientState {
             is_flying: false,
             flying_speed: 0.05,
             selected_hotbar_slot: 0,
+            next_window_id: 1,
+            open_selector: None,
         }
     }
 }
@@ -60,6 +63,8 @@ pub struct ClientState {
     is_flying: bool,
     flying_speed: f32,
     selected_hotbar_slot: u8,
+    next_window_id: u8,
+    open_selector: Option<OpenSelectorState>,
 }
 
 impl ClientState {
@@ -283,5 +288,36 @@ impl ClientState {
 
     pub const fn set_selected_hotbar_slot(&mut self, slot: u8) {
         self.selected_hotbar_slot = slot;
+    }
+
+    // Window ID
+
+    /// Allocates the next window ID, wrapping from 200 back to 1 (never 0).
+    pub const fn allocate_window_id(&mut self) -> u8 {
+        let id = self.next_window_id;
+        self.next_window_id = if self.next_window_id >= 200 {
+            1
+        } else {
+            self.next_window_id + 1
+        };
+        id
+    }
+
+    // Open selector
+
+    pub const fn open_selector(&self) -> Option<&OpenSelectorState> {
+        self.open_selector.as_ref()
+    }
+
+    pub const fn open_selector_mut(&mut self) -> Option<&mut OpenSelectorState> {
+        self.open_selector.as_mut()
+    }
+
+    pub fn set_open_selector(&mut self, state: OpenSelectorState) {
+        self.open_selector = Some(state);
+    }
+
+    pub const fn take_open_selector(&mut self) -> Option<OpenSelectorState> {
+        self.open_selector.take()
     }
 }

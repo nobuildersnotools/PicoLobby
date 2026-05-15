@@ -38,6 +38,20 @@ impl Default for SelectorItemConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LobbyNpcConfig {
+    pub id: String,
+    pub destination: String,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub yaw: f32,
+    #[serde(default)]
+    pub pitch: f32,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +63,8 @@ pub struct LobbyConfig {
     pub servers: Vec<LobbyServerEntry>,
     /// Optional hotbar selector item.  Only active when `enabled = true`.
     pub selector: Option<SelectorItemConfig>,
+    /// Player-style NPCs that navigate to configured lobby servers.
+    pub npcs: Vec<LobbyNpcConfig>,
 }
 
 impl Default for LobbyConfig {
@@ -56,8 +72,22 @@ impl Default for LobbyConfig {
         Self {
             enabled: false,
             chat_format: DEFAULT_CHAT_FORMAT.to_string(),
-            servers: Vec::new(),
+            servers: vec![LobbyServerEntry {
+                id: "survival".to_string(),
+                display_name: "Survival".to_string(),
+                server: "survival".to_string(),
+            }],
             selector: Some(SelectorItemConfig::default()),
+            npcs: vec![LobbyNpcConfig {
+                id: "survival-npc".to_string(),
+                destination: "survival".to_string(),
+                name: "Survival".to_string(),
+                x: 0.0,
+                y: 320.0,
+                z: 4.0,
+                yaw: 180.0,
+                pitch: 0.0,
+            }],
         }
     }
 }

@@ -40,6 +40,8 @@ fn player_entity_type_id(version: ProtocolVersion) -> i32 {
         155
     } else if version.is_after_inclusive(ProtocolVersion::V1_21_9) {
         151
+    } else if version.is_after_inclusive(ProtocolVersion::V1_21_6) {
+        149
     } else if version.is_after_inclusive(ProtocolVersion::V1_21_2) {
         148
     } else if version.is_after_inclusive(ProtocolVersion::V1_20_5) {
@@ -68,7 +70,9 @@ impl EncodePacket for SpawnEntityPacket {
         }
         self.pitch.encode(writer, version)?;
         self.yaw.encode(writer, version)?;
-        self.head_yaw.encode(writer, version)?;
+        if version.is_after_inclusive(ProtocolVersion::V1_20_2) {
+            self.head_yaw.encode(writer, version)?;
+        }
         VarInt::new(0).encode(writer, version)?;
         if version.is_before_inclusive(ProtocolVersion::V1_21_7) {
             encode_zero_legacy_velocity(writer, version)?;
@@ -91,4 +95,20 @@ fn encode_zero_legacy_velocity(
     0_i16.encode(writer, version)?;
     0_i16.encode(writer, version)?;
     0_i16.encode(writer, version)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_entity_type_id_tracks_1_21_registry_shifts() {
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21), 128);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_4), 148);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_5), 148);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_6), 149);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_7), 149);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_9), 151);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_11), 155);
+    }
 }

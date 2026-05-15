@@ -1,5 +1,8 @@
+mod click_container;
+mod close_container;
 mod commands;
 pub mod fetch_minecraft_profile;
+mod interact;
 mod player_abilities;
 mod player_command;
 mod player_input;

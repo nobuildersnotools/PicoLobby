@@ -20,17 +20,22 @@ use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
 use minecraft_packets::login::login_state_packet::LoginStartPacket;
 use minecraft_packets::login::login_success_packet::LoginSuccessPacket;
 use minecraft_packets::login::set_compression_packet::SetCompressionPacket;
+use minecraft_packets::play::attack_packet::AttackPacket;
 use minecraft_packets::play::boss_bar_packet::BossBarPacket;
 use minecraft_packets::play::chat_command_packet::ChatCommandPacket;
 use minecraft_packets::play::chat_message_packet::ChatMessagePacket;
 use minecraft_packets::play::chunk_data_and_update_light_packet::ChunkDataAndUpdateLightPacket;
+use minecraft_packets::play::click_container_packet::ClickContainerPacket;
 use minecraft_packets::play::client_bound_keep_alive_packet::ClientBoundKeepAlivePacket;
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
+use minecraft_packets::play::close_container_packet::CloseContainerPacket;
 use minecraft_packets::play::commands_packet::CommandsPacket;
+use minecraft_packets::play::confirm_transaction_packet::ConfirmTransactionPacket;
 use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
 use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_packets::play::game_event_packet::GameEventPacket;
+use minecraft_packets::play::interact_packet::InteractPacket;
 use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket;
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::legacy_use_item_packet::LegacyUseItemPacket;
@@ -39,6 +44,7 @@ use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::move_entity_packet::{
     MoveEntityPosPacket, MoveEntityPosRotPacket, MoveEntityRotPacket,
 };
+use minecraft_packets::play::open_screen_packet::OpenScreenPacket;
 use minecraft_packets::play::player_command_packet::PlayerCommandPacket;
 use minecraft_packets::play::player_info_remove_packet::PlayerInfoRemovePacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
@@ -50,6 +56,7 @@ use minecraft_packets::play::server_bound_set_held_item_packet::ServerBoundSetHe
 use minecraft_packets::play::server_data_packet::ServerDataPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
+use minecraft_packets::play::set_container_content_packet::SetContainerContentPacket;
 use minecraft_packets::play::set_container_slot_packet::SetContainerSlotPacket;
 use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnPositionPacket;
 use minecraft_packets::play::set_entity_data_packet::SetEntityMetadataPacket;
@@ -483,6 +490,57 @@ pub enum PacketRegistry {
     )]
     SetContainerSlot(SetContainerSlotPacket),
 
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:open_screen")]
+    OpenScreen(OpenScreenPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:container_set_content"
+    )]
+    SetContainerContent(SetContainerContentPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:container_close"
+    )]
+    ClientBoundCloseContainer(CloseContainerPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:legacy_confirm_transaction"
+    )]
+    ClientBoundConfirmTransaction(ConfirmTransactionPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:container_click"
+    )]
+    ClickContainer(ClickContainerPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:container_close"
+    )]
+    CloseContainer(CloseContainerPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:legacy_confirm_transaction"
+    )]
+    ServerBoundConfirmTransaction(ConfirmTransactionPacket),
+
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:interact")]
+    Interact(InteractPacket),
+
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:attack")]
+    Attack(AttackPacket),
+
     #[protocol_id(
         state = "play",
         bound = "serverbound",
@@ -530,6 +588,13 @@ impl PacketHandler for PacketRegistry {
             Self::ServerBoundSetHeldItem(packet) => packet.handle(client_state, server_state),
             Self::UseItem(packet) => packet.handle(client_state, server_state),
             Self::LegacyUseItem(packet) => packet.handle(client_state, server_state),
+            Self::ClickContainer(packet) => packet.handle(client_state, server_state),
+            Self::CloseContainer(packet) => packet.handle(client_state, server_state),
+            Self::ServerBoundConfirmTransaction(packet) => {
+                packet.handle(client_state, server_state)
+            }
+            Self::Interact(packet) => packet.handle(client_state, server_state),
+            Self::Attack(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }
@@ -689,6 +754,71 @@ mod tests {
     }
 
     #[test]
+    fn decodes_current_interact_packet_ids() {
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_21, 22),
+            (ProtocolVersion::V1_21_6, 25),
+            (ProtocolVersion::V1_21_9, 25),
+            (ProtocolVersion::V26_1, 26),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, &[0xac, 0x02, 0, 0, 0]);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::Interact(packet) => {
+                    assert_eq!(packet.target_entity_id(), 300);
+                    assert!(packet.triggers_npc_interaction());
+                }
+                _ => panic!("expected interact packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_v26_1_attack_packet_id() {
+        let raw_packet = RawPacket::from_bytes(1, &[0xac, 0x02]);
+        let packet =
+            PacketRegistry::decode_packet(ProtocolVersion::V26_1, State::Play, raw_packet).unwrap();
+
+        match packet {
+            PacketRegistry::Attack(packet) => {
+                assert_eq!(packet.target_entity_id(), 300);
+            }
+            _ => panic!("expected attack packet for V26_1"),
+        }
+    }
+
+    #[test]
+    fn decodes_legacy_interact_packet_overrides() {
+        for (version, packet_id, data) in [
+            (ProtocolVersion::V1_7_2, 0x02, &[0, 0, 1, 44, 0][..]),
+            (ProtocolVersion::V1_8, 0x02, &[0xac, 0x02, 0][..]),
+            (ProtocolVersion::V1_9, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_9_3, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_10, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_11, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_12, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_12_2, 0x0a, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_13_2, 0x0d, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_14_4, 0x0e, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_15_2, 0x0e, &[0xac, 0x02, 0, 0][..]),
+            (ProtocolVersion::V1_19_4, 0x0f, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_20_5, 0x13, &[0xac, 0x02, 0, 0, 0][..]),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, data);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+
+            match packet {
+                PacketRegistry::Interact(packet) => {
+                    assert_eq!(packet.target_entity_id(), 300);
+                    assert!(packet.triggers_npc_interaction());
+                }
+                _ => panic!("expected interact packet for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn encodes_current_player_info_remove_packet() {
         let uuid = Uuid::from_u128(1);
         let packet = PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid));
@@ -699,6 +829,33 @@ mod tests {
             raw_packet.bytes(),
             &[61, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,]
         );
+    }
+
+    #[test]
+    fn encodes_v1_19_3_to_v1_20_5_player_info_remove_packet_ids() {
+        for (protocol_version, packet_id) in [
+            (ProtocolVersion::V1_19_3, 0x35),
+            (ProtocolVersion::V1_19_4, 0x39),
+            (ProtocolVersion::V1_20, 0x39),
+            (ProtocolVersion::V1_20_2, 0x3b),
+            (ProtocolVersion::V1_20_3, 0x3b),
+            (ProtocolVersion::V1_20_5, 0x3d),
+        ] {
+            let uuid = Uuid::from_u128(1);
+            let packet = PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid));
+            let raw_packet = packet.encode_packet(protocol_version).unwrap();
+
+            assert_eq!(
+                raw_packet.packet_id(),
+                Some(packet_id),
+                "{protocol_version:?}"
+            );
+            assert_eq!(
+                raw_packet.data(),
+                &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                "{protocol_version:?}"
+            );
+        }
     }
 
     #[test]
@@ -713,6 +870,32 @@ mod tests {
 
             assert_eq!(raw_packet.packet_id(), Some(packet_id));
             assert_eq!(raw_packet.data(), data);
+        }
+    }
+
+    #[test]
+    fn encodes_legacy_bungeecord_connect_plugin_message_packet_ids() {
+        for version in [
+            ProtocolVersion::V1_9,
+            ProtocolVersion::V1_9_3,
+            ProtocolVersion::V1_10,
+            ProtocolVersion::V1_11,
+            ProtocolVersion::V1_12_2,
+        ] {
+            let packet = PacketRegistry::PlayClientBoundPluginMessage(
+                PlayClientBoundPluginMessagePacket::bungeecord_connect("main"),
+            );
+            let raw = packet.encode_packet(version).unwrap();
+
+            assert_eq!(raw.packet_id(), Some(0x18), "{version:?}");
+            assert_eq!(
+                raw.data(),
+                &[
+                    0x0a, b'B', b'u', b'n', b'g', b'e', b'e', b'C', b'o', b'r', b'd', 0x00, 0x07,
+                    b'C', b'o', b'n', b'n', b'e', b'c', b't', 0x00, 0x04, b'm', b'a', b'i', b'n',
+                ],
+                "{version:?}"
+            );
         }
     }
 
@@ -1209,5 +1392,126 @@ mod tests {
             .inner() as usize;
 
         assert_eq!(payload_len + 1, reader.remaining());
+    }
+
+    #[test]
+    fn encodes_open_screen_packet_ids_across_versions() {
+        use minecraft_packets::play::open_screen_packet::OpenScreenPacket;
+        use pico_text_component::prelude::Component;
+
+        let title = Component::new("Test");
+        for (version, expected_id) in [
+            (ProtocolVersion::V1_8, 0x2d),
+            (ProtocolVersion::V1_12_2, 0x13),
+            (ProtocolVersion::V1_13, 0x14),
+            (ProtocolVersion::V1_14, 0x2e),
+            (ProtocolVersion::V1_20_5, 0x33),
+            (ProtocolVersion::V1_21, 51),
+            (ProtocolVersion::V26_1, 59),
+        ] {
+            let packet = PacketRegistry::OpenScreen(OpenScreenPacket::new(1, title.clone()));
+            let raw = packet.encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?}");
+        }
+    }
+
+    #[test]
+    fn encodes_set_container_content_packet_ids_across_versions() {
+        use minecraft_packets::play::set_container_content_packet::SetContainerContentPacket;
+
+        for (version, expected_id) in [
+            (ProtocolVersion::V1_8, 0x30),
+            (ProtocolVersion::V1_12_2, 0x14),
+            (ProtocolVersion::V1_13, 0x15),
+            (ProtocolVersion::V1_14, 0x14),
+            (ProtocolVersion::V1_20_5, 0x13),
+            (ProtocolVersion::V1_21, 19),
+            (ProtocolVersion::V26_1, 18),
+        ] {
+            let packet =
+                PacketRegistry::SetContainerContent(SetContainerContentPacket::new(1, 1, vec![]));
+            let raw = packet.encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?}");
+        }
+    }
+
+    #[test]
+    fn decodes_click_container_packet_ids_across_versions() {
+        for (version, packet_id, data) in [
+            (
+                ProtocolVersion::V1_8,
+                0x0e,
+                &[0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00][..],
+            ),
+            (
+                ProtocolVersion::V1_12_2,
+                0x07,
+                &[0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00][..],
+            ),
+            (
+                ProtocolVersion::V1_13,
+                0x08,
+                &[0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00][..],
+            ),
+            (
+                ProtocolVersion::V1_20_5,
+                0x0e,
+                &[0x01, 0x01, 0x00, 0x03, 0x00, 0x00][..],
+            ),
+            (
+                ProtocolVersion::V1_21,
+                14,
+                &[0x01, 0x01, 0x00, 0x03, 0x00, 0x00][..],
+            ),
+            (
+                ProtocolVersion::V26_1,
+                18,
+                &[0x01, 0x01, 0x00, 0x03, 0x00, 0x00][..],
+            ),
+        ] {
+            let raw = RawPacket::from_bytes(packet_id, data);
+            let pkt = PacketRegistry::decode_packet(version, State::Play, raw).unwrap();
+            match pkt {
+                PacketRegistry::ClickContainer(p) => {
+                    assert_eq!(p.window_id, 1, "{version:?}");
+                }
+                _ => panic!("expected ClickContainer for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn encodes_legacy_confirm_transaction_packet_ids() {
+        use minecraft_packets::play::confirm_transaction_packet::ConfirmTransactionPacket;
+
+        for (version, expected_id) in [
+            (ProtocolVersion::V1_8, 0x32),
+            (ProtocolVersion::V1_12_2, 0x11),
+        ] {
+            let packet = PacketRegistry::ClientBoundConfirmTransaction(
+                ConfirmTransactionPacket::new(1, 7, false),
+            );
+            let raw = packet.encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?}");
+        }
+    }
+
+    #[test]
+    fn decodes_legacy_confirm_transaction_packet_ids() {
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_8, 0x0f),
+            (ProtocolVersion::V1_12_2, 0x05),
+        ] {
+            let raw = RawPacket::from_bytes(packet_id, &[0x01, 0x00, 0x07, 0x00]);
+            let pkt = PacketRegistry::decode_packet(version, State::Play, raw).unwrap();
+            match pkt {
+                PacketRegistry::ServerBoundConfirmTransaction(p) => {
+                    assert_eq!(p.window_id, 1, "{version:?}");
+                    assert_eq!(p.action_number, 7, "{version:?}");
+                    assert!(!p.accepted, "{version:?}");
+                }
+                _ => panic!("expected ConfirmTransaction for {version:?}"),
+            }
+        }
     }
 }

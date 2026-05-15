@@ -1,7 +1,7 @@
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{
-    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPosition,
-    LobbyRecipient, LobbySession,
+    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc,
+    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySession,
 };
 use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
 use minecraft_packets::play::move_entity_packet::{
@@ -71,7 +71,7 @@ pub fn leave_visibility_packets(
         PacketRegistry::DestroyEntities(DestroyEntitiesPacket::single(departed_entity_id.get()))
     };
 
-    let player_info_remove = if recipient_version.is_after_inclusive(ProtocolVersion::V1_21) {
+    let player_info_remove = if recipient_version.is_after_inclusive(ProtocolVersion::V1_19_3) {
         Some(PacketRegistry::PlayerInfoRemove(
             PlayerInfoRemovePacket::single(departed_uuid),
         ))
@@ -301,6 +301,70 @@ pub fn join_visibility_batches_for_existing(plan: &LobbyJoinPlan) -> Vec<LobbyPa
         .collect()
 }
 
+pub fn npc_spawn_packets_for_join(
+    plan: &LobbyNpcSpawnPlan,
+    recipient_version: ProtocolVersion,
+) -> Vec<PacketRegistry> {
+    plan.npcs
+        .iter()
+        .flat_map(|npc| npc_spawn_packets(npc, recipient_version))
+        .collect()
+}
+
+fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<PacketRegistry> {
+    match npc.kind {
+        LobbyNpcKind::Player => {}
+    }
+
+    let mut session = LobbySession::new(
+        npc.uuid,
+        npc.name.clone(),
+        None,
+        recipient_version,
+        npc.position,
+    );
+    session.entity_id = npc.entity_id;
+
+    let mut packets = if recipient_version.is_after_inclusive(ProtocolVersion::V1_20_2) {
+        player_spawn_packets_current(&session)
+    } else if recipient_version.is_after_inclusive(ProtocolVersion::V1_7_2)
+        && recipient_version.is_before_inclusive(ProtocolVersion::V1_20)
+    {
+        player_spawn_packets_legacy(&session, recipient_version)
+    } else {
+        Vec::new()
+    };
+
+    if npc_player_info_remove_after_spawn(recipient_version) {
+        packets.push(npc_player_info_remove_packet(
+            recipient_version,
+            npc.uuid,
+            &npc.name,
+        ));
+    }
+    packets
+}
+
+fn npc_player_info_remove_after_spawn(recipient_version: ProtocolVersion) -> bool {
+    !recipient_version.between_inclusive(ProtocolVersion::V1_9, ProtocolVersion::V1_12_2)
+}
+
+fn npc_player_info_remove_packet(
+    recipient_version: ProtocolVersion,
+    uuid: Uuid,
+    username: &str,
+) -> PacketRegistry {
+    if recipient_version.is_after_inclusive(ProtocolVersion::V1_19_3) {
+        PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid))
+    } else if recipient_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove(uuid, username.to_owned()))
+    } else {
+        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove_legacy_name(
+            username.to_owned(),
+        ))
+    }
+}
+
 fn player_info_packet(player: &LobbySession) -> PacketRegistry {
     player.textures.as_ref().map_or_else(
         || {
@@ -361,9 +425,8 @@ fn player_spawn_packets_legacy(
         player.entity_id.get(),
         player.position.yaw,
     ));
-    // Metadata is embedded as a terminator in the SpawnPlayer packet payload for 1.8-1.19.3,
-    // so the separate metadata packet is redundant for those versions but harmless. For 1.19.4+
-    // the metadata must be sent separately. Send it for all legacy versions since it is safe.
+    // Metadata is embedded only in the 1.7.2/1.8 spawn-player payloads. For 1.9+
+    // it must be sent separately, which is also safe for the older clients.
     let _ = version;
     let metadata = PacketRegistry::SetEntityMetadata(player_metadata_packet(
         player.entity_id.get(),
@@ -461,7 +524,7 @@ mod tests {
             batches[1].packets.as_slice(),
             [
                 PacketRegistry::DestroyEntities(_),
-                PacketRegistry::PlayerInfoUpdate(_)
+                PacketRegistry::PlayerInfoRemove(_)
             ]
         ));
         assert!(matches!(
@@ -509,12 +572,12 @@ mod tests {
 
     #[test]
     fn encodes_leave_visibility_for_v1_19_4() {
-        assert_legacy_remove_bucket(ProtocolVersion::V1_19_4, 62, 58);
+        assert_destroy_with_current_player_info_remove_bucket(ProtocolVersion::V1_19_4, 62, 57);
     }
 
     #[test]
     fn encodes_leave_visibility_for_v1_20_5() {
-        assert_legacy_remove_bucket(ProtocolVersion::V1_20_5, 66, 62);
+        assert_destroy_with_current_player_info_remove_bucket(ProtocolVersion::V1_20_5, 66, 61);
     }
 
     #[test]
@@ -944,6 +1007,35 @@ mod tests {
         );
     }
 
+    fn assert_destroy_with_current_player_info_remove_bucket(
+        protocol_version: ProtocolVersion,
+        destroy_packet_id: u8,
+        player_info_remove_packet_id: u8,
+    ) {
+        let packets = leave_visibility_packets(
+            protocol_version,
+            Uuid::from_u128(99),
+            DEPARTED_NAME,
+            EntityId::new(300),
+        );
+        assert_destroy_entities_packet(packets, protocol_version, destroy_packet_id, &[1, 172, 2]);
+
+        let mut player_info_data = vec![1];
+        player_info_data.extend_from_slice(&UUID_BYTES);
+        let packets = leave_visibility_packets(
+            protocol_version,
+            Uuid::from_u128(99),
+            DEPARTED_NAME,
+            EntityId::new(300),
+        );
+        assert_player_info_remove_packet(
+            packets,
+            protocol_version,
+            player_info_remove_packet_id,
+            &player_info_data,
+        );
+    }
+
     fn assert_destroy_entities_packet(
         mut packets: Vec<PacketRegistry>,
         protocol_version: ProtocolVersion,
@@ -1140,6 +1232,7 @@ mod tests {
         assert_eq!(data.len(), 53);
         // entity type 122 = VarInt [0x7a]
         assert_eq!(data[18], 0x7a);
+        assert_eq!(data[45], 64); // head yaw
         // data VarInt + legacy zero velocity as three shorts
         assert_eq!(&data[46..53], &[0, 0, 0, 0, 0, 0, 0]);
     }
@@ -1157,6 +1250,7 @@ mod tests {
         assert_eq!(data.len(), 53);
         // entity type 124 = VarInt [0x7c]
         assert_eq!(data[18], 0x7c);
+        assert_eq!(data[45], 64); // head yaw
     }
 
     #[test]
@@ -1236,10 +1330,24 @@ mod tests {
         let raw = spawn.encode_packet(ProtocolVersion::V1_12_2).unwrap();
         // minecraft:add_player for V1_12 = ID 5
         assert_eq!(raw.packet_id(), Some(5));
-        // data = entity_id (VarInt 20=[0x14]) + uuid (16 bytes) + x,y,z (3×f64=24 bytes) +
-        //        yaw, pitch (2 bytes) + metadata terminator 0xFF
+        // data = entity_id (VarInt 20=[0x14]) + uuid (16 bytes) + x,y,z (3*f64=24 bytes) +
+        //        yaw, pitch (2 bytes) + empty metadata list terminator.
         assert_eq!(raw.data().len(), 44);
-        assert_eq!(raw.data()[43], 0xFF); // metadata terminator for 1.9+
+        assert_eq!(raw.data()[43], 0xFF);
+    }
+
+    #[test]
+    fn join_newcomer_v1_14_4_gets_spawn_player_packet_with_empty_metadata_list() {
+        let new = make_session(1, 1, 10);
+        let existing = make_session(2, 2, 20);
+        let plan = join_plan(new, vec![existing]);
+        let mut packets = join_visibility_packets_for_newcomer(&plan, ProtocolVersion::V1_14_4);
+        let spawn = packets.remove(1);
+        let raw = spawn.encode_packet(ProtocolVersion::V1_14_4).unwrap();
+        // minecraft:add_player for V1_14 = ID 5
+        assert_eq!(raw.packet_id(), Some(5));
+        assert_eq!(raw.data().len(), 44);
+        assert_eq!(raw.data()[43], 0xFF);
     }
 
     #[test]
@@ -1282,6 +1390,43 @@ mod tests {
         assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
         assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
         assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+    }
+
+    #[test]
+    fn npc_spawn_keeps_player_info_for_v1_9_through_v1_12_2_interactions() {
+        for version in [
+            ProtocolVersion::V1_9,
+            ProtocolVersion::V1_9_3,
+            ProtocolVersion::V1_10,
+            ProtocolVersion::V1_11,
+            ProtocolVersion::V1_12_2,
+        ] {
+            let packets = npc_spawn_packets_for_join(&npc_spawn_plan(), version);
+
+            assert_eq!(packets.len(), 4, "{version:?}");
+            assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
+            assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
+            assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
+            assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
+        }
+    }
+
+    #[test]
+    fn npc_spawn_still_removes_player_info_outside_v1_9_through_v1_12_2() {
+        for version in [
+            ProtocolVersion::V1_8,
+            ProtocolVersion::V1_13,
+            ProtocolVersion::V1_14_4,
+            ProtocolVersion::V1_15_2,
+        ] {
+            let packets = npc_spawn_packets_for_join(&npc_spawn_plan(), version);
+
+            assert_eq!(packets.len(), 5, "{version:?}");
+            assert!(matches!(
+                packets.last(),
+                Some(PacketRegistry::PlayerInfoUpdate(_))
+            ));
+        }
     }
 
     #[test]
@@ -1403,5 +1548,16 @@ mod tests {
         assert_eq!(&data[47..51], [0x00, 0x00, 0x08, 0x00]);
         assert_eq!(&data[51..55], [0xFF, 0xFF, 0xFF, 0x60]);
         assert_eq!(&data[59..62], [0, 0x02, 0x7f]);
+    }
+
+    fn npc_spawn_plan() -> LobbyNpcSpawnPlan {
+        let mut npc = LobbyNpc::player(
+            "survival-npc",
+            "survival",
+            "Survival",
+            LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
+        );
+        npc.entity_id = EntityId::new(300);
+        LobbyNpcSpawnPlan { npcs: vec![npc] }
     }
 }

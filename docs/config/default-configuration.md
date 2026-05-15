@@ -65,6 +65,31 @@ message_of_the_day = "A Minecraft Server"
 show_online_player_count = true
 server_icon = "server-icon.png"
 
+[lobby]
+enabled = false
+chat_format = "<white>&lt;{sender}&gt; {message}</white>"
+
+[[lobby.servers]]
+id = "survival"
+display_name = "Survival"
+server = "survival"
+
+[lobby.selector]
+slot = 4
+item = "minecraft:compass"
+display_name = "<bold><gold>Server Selector"
+lore = ["<gray>Right-click to choose a server."]
+
+[[lobby.npcs]]
+id = "survival-npc"
+destination = "survival"
+name = "Survival"
+x = 0.0
+y = 320.0
+z = 4.0
+yaw = 180.0
+pitch = 0.0
+
 [compression]
 threshold = -1
 level = 6
@@ -105,5 +130,6 @@ spawn = "spawn"
 fly = "fly"
 fly_speed = "flyspeed"
 transfer = "transfer"
+server = "server"
 ```
 :::
