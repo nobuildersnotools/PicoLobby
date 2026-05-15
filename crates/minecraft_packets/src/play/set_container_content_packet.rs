@@ -54,36 +54,24 @@ mod tests {
 
     #[test]
     fn pre_1_17_1_uses_ubyte_window_id_and_short_count() {
-        let pkt = SetContainerContentPacket::new(1, 0, vec![LobbySlot::empty()]);
-        let mut writer = BinaryWriter::default();
-        pkt.encode(&mut writer, ProtocolVersion::V1_17).unwrap();
-        let bytes = writer.as_slice().to_vec();
-        // [0x01 (window_id), 0x00 0x01 (count Short = 1), empty_slot]
-        assert_eq!(bytes[0], 0x01); // window_id as UByte
-        assert_eq!(bytes[1], 0x00); // short count high byte
-        assert_eq!(bytes[2], 0x01); // short count low byte
+        // V1_8 and V1_17 both use the old format: UByte window_id, Short count.
+        for version in [ProtocolVersion::V1_8, ProtocolVersion::V1_17] {
+            let pkt = SetContainerContentPacket::new(1, 0, vec![LobbySlot::empty()]);
+            let mut writer = BinaryWriter::default();
+            pkt.encode(&mut writer, version).unwrap();
+            let bytes = writer.as_slice().to_vec();
+            assert_eq!(bytes[0], 0x01, "window_id for {version:?}");
+            assert_eq!(&bytes[1..3], &[0x00, 0x01], "short count for {version:?}");
+        }
     }
 
     #[test]
-    fn v1_17_1_uses_varint_window_id_and_state_id() {
+    fn v1_17_1_uses_varint_window_id_state_id_and_varint_count() {
         let pkt = SetContainerContentPacket::new(1, 5, vec![LobbySlot::empty()]);
         let mut writer = BinaryWriter::default();
         pkt.encode(&mut writer, ProtocolVersion::V1_17_1).unwrap();
         let bytes = writer.as_slice().to_vec();
-        // [VarInt(1) window_id, VarInt(5) state_id, VarInt(1) count, slot, cursor]
-        assert_eq!(bytes[0], 0x01); // window_id
-        assert_eq!(bytes[1], 0x05); // state_id
-        assert_eq!(bytes[2], 0x01); // count
-    }
-
-    #[test]
-    fn v1_8_uses_ubyte_window_id() {
-        let pkt = SetContainerContentPacket::new(2, 0, vec![]);
-        let mut writer = BinaryWriter::default();
-        pkt.encode(&mut writer, ProtocolVersion::V1_8).unwrap();
-        let bytes = writer.as_slice().to_vec();
-        assert_eq!(bytes[0], 0x02); // window_id
-        assert_eq!(bytes[1], 0x00); // count high
-        assert_eq!(bytes[2], 0x00); // count low (0 slots)
+        // VarInt(1) window_id, VarInt(5) state_id, VarInt(1) count, slot, cursor
+        assert_eq!(&bytes[..3], &[0x01, 0x05, 0x01]);
     }
 }

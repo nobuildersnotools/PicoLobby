@@ -567,20 +567,6 @@ mod tests {
     }
 
     #[test]
-    fn v1_13_sections_keep_inline_light_without_block_count() {
-        let section = ChunkSection::void(1);
-        let mut writer = BinaryWriter::default();
-
-        encode_pre_v1_16_section(&section, &mut writer, ProtocolVersion::V1_13_2).unwrap();
-
-        let bytes = writer.into_inner();
-        assert_eq!(6149, bytes.len());
-        assert_eq!(&[0x04, 0x01, 0x00, 0x80, 0x02], &bytes[..5]);
-        assert!(bytes[5..4101].iter().all(|byte| *byte == 0));
-        assert!(bytes[4101..].iter().all(|byte| *byte == 0xFF));
-    }
-
-    #[test]
     fn v1_14_full_chunk_payload_encodes_biomes_as_ints() {
         let chunk_data = ChunkData::void(VoidChunkContext {
             chunk_x: 0,
@@ -611,41 +597,36 @@ mod tests {
     }
 
     #[test]
-    fn v1_12_void_section_encodes_to_palette_format() {
-        let section = ChunkSection::void(1);
-        let mut writer = BinaryWriter::default();
+    fn v1_9_to_v1_13_void_section_uses_palette_format_with_inline_light() {
+        // 1.9–1.13: palette format with inline block and sky light, no block count.
+        // Total: bpe(1) + palette_len(1) + air_entry(1) + data_len(2) +
+        //        256 longs(2048) + block_light(2048) + sky_light(2048) = 6149 bytes.
+        for version in [ProtocolVersion::V1_12_2, ProtocolVersion::V1_13_2] {
+            let section = ChunkSection::void(1);
+            let mut writer = BinaryWriter::default();
+            encode_pre_v1_16_section(&section, &mut writer, version).unwrap();
+            let bytes = writer.into_inner();
 
-        encode_pre_v1_16_section(&section, &mut writer, ProtocolVersion::V1_12_2).unwrap();
-
-        let bytes = writer.into_inner();
-        // 1.9–1.12 uses palette format: bpe(1) + palette_len(1) + air_entry(1) +
-        // data_len(2) + 256 longs(2048) + block_light(2048) + sky_light(2048) = 6149
-        assert_eq!(
-            bytes.len(),
-            6149,
-            "1.9–1.12 section must use palette format"
-        );
-        // bits_per_entry = 4
-        assert_eq!(bytes[0], 4);
-        // palette: length=1, entry=0 (air)
-        assert_eq!(&bytes[1..3], &[0x01, 0x00]);
-        // data array length VarInt = 256 (0x80 0x02)
-        assert_eq!(&bytes[3..5], &[0x80, 0x02]);
-        // data = all zeros (all air)
-        assert!(
-            bytes[5..2053].iter().all(|&b| b == 0),
-            "block data must be zero for void"
-        );
-        // block light = all zeros
-        assert!(
-            bytes[2053..4101].iter().all(|&b| b == 0),
-            "block light must be dark"
-        );
-        // sky light = all 0xFF
-        assert!(
-            bytes[4101..].iter().all(|&b| b == 0xFF),
-            "sky light must be fully bright"
-        );
+            assert_eq!(bytes.len(), 6149, "wrong section size for {version:?}");
+            // bpe=4, palette=[1, 0 (air)], data_len=256
+            assert_eq!(
+                &bytes[..5],
+                &[0x04, 0x01, 0x00, 0x80, 0x02],
+                "palette header for {version:?}"
+            );
+            assert!(
+                bytes[5..2053].iter().all(|&b| b == 0),
+                "block data must be air for {version:?}"
+            );
+            assert!(
+                bytes[2053..4101].iter().all(|&b| b == 0),
+                "block light must be dark for {version:?}"
+            );
+            assert!(
+                bytes[4101..].iter().all(|&b| b == 0xFF),
+                "sky light must be bright for {version:?}"
+            );
+        }
     }
 
     #[test]

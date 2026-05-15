@@ -37,34 +37,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_keep_alive_packet_v1_12_2() {
-        let packet = ClientBoundKeepAlivePacket::new(0).unwrap();
-        let mut writer = BinaryWriter::new();
-        packet
-            .encode(&mut writer, ProtocolVersion::V1_12_2)
-            .unwrap();
-        let encoded_packet = writer.into_inner();
-        assert_eq!(
-            encoded_packet,
-            vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        );
-    }
-
-    #[test]
-    fn test_keep_alive_packet_v1_8() {
-        let packet = ClientBoundKeepAlivePacket::new(0).unwrap();
-        let mut writer = BinaryWriter::new();
-        packet.encode(&mut writer, ProtocolVersion::V1_8).unwrap();
-        let encoded_packet = writer.into_inner();
-        assert_eq!(encoded_packet, vec![0x00]);
-    }
-
-    #[test]
-    fn test_keep_alive_packet_v1_7_2() {
-        let packet = ClientBoundKeepAlivePacket::new(0).unwrap();
-        let mut writer = BinaryWriter::new();
-        packet.encode(&mut writer, ProtocolVersion::V1_7_2).unwrap();
-        let encoded_packet = writer.into_inner();
-        assert_eq!(encoded_packet, vec![0x00, 0x00, 0x00, 0x00]);
+    fn encodes_id_0_with_correct_wire_width_per_era() {
+        // pre-1.8: i32 (4 bytes), 1.8–1.12.1: VarInt, 1.12.2+: i64 (8 bytes)
+        let cases: &[(ProtocolVersion, &[u8])] = &[
+            (ProtocolVersion::V1_7_2, &[0x00, 0x00, 0x00, 0x00]),
+            (ProtocolVersion::V1_8, &[0x00]),
+            (
+                ProtocolVersion::V1_12_2,
+                &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+        ];
+        for &(version, expected) in cases {
+            let packet = ClientBoundKeepAlivePacket::new(0).unwrap();
+            let mut writer = BinaryWriter::new();
+            packet.encode(&mut writer, version).unwrap();
+            assert_eq!(
+                writer.into_inner(),
+                expected,
+                "wrong encoding for {version:?}"
+            );
+        }
     }
 }

@@ -110,10 +110,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_current_interact_main_hand() {
+    fn decodes_main_hand_interact_across_eras() {
+        // V1_21: entity_id VarInt, action VarInt(0=Interact), hand VarInt(0=main), sneaking bool
         let mut reader = BinaryReader::new(&[0xac, 0x02, 0, 0, 0]);
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
+        assert_eq!(packet.target_entity_id(), 300);
+        assert_eq!(packet.action(), InteractAction::Interact);
+        assert!(packet.triggers_npc_interaction());
+        assert_eq!(packet.sneaking(), Some(false));
 
+        // V26_1: entity_id VarInt, hand VarInt(0=main), sneaking bool — no action field
+        let mut reader = BinaryReader::new(&[0xac, 0x02, 0, 0]);
+        let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V26_1).unwrap();
         assert_eq!(packet.target_entity_id(), 300);
         assert_eq!(packet.action(), InteractAction::Interact);
         assert!(packet.triggers_npc_interaction());
@@ -130,37 +138,20 @@ mod tests {
 
         let mut reader = BinaryReader::new(&data);
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
-
         assert_eq!(packet.action(), InteractAction::InteractAt);
         assert!(packet.triggers_npc_interaction());
         assert_eq!(packet.sneaking(), Some(true));
     }
 
     #[test]
-    fn offhand_interaction_is_not_primary() {
-        let mut reader = BinaryReader::new(&[0xac, 0x02, 0, 1, 0]);
+    fn offhand_does_not_trigger_and_attack_always_triggers() {
+        let mut reader = BinaryReader::new(&[0xac, 0x02, 0, 1, 0]); // Interact, off hand
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
-
         assert!(!packet.triggers_npc_interaction());
-    }
 
-    #[test]
-    fn attack_triggers_npc_interaction_for_legacy_interact_packets() {
-        let mut reader = BinaryReader::new(&[0xac, 0x02, 1, 0]);
+        let mut reader = BinaryReader::new(&[0xac, 0x02, 1, 0]); // Attack
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
-
         assert_eq!(packet.action(), InteractAction::Attack);
         assert!(packet.triggers_npc_interaction());
-    }
-
-    #[test]
-    fn decodes_current_right_click_without_legacy_action() {
-        let mut reader = BinaryReader::new(&[0xac, 0x02, 0, 0]);
-        let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V26_1).unwrap();
-
-        assert_eq!(packet.target_entity_id(), 300);
-        assert_eq!(packet.action(), InteractAction::Interact);
-        assert!(packet.triggers_npc_interaction());
-        assert_eq!(packet.sneaking(), Some(false));
     }
 }

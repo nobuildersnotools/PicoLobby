@@ -32,20 +32,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_slot_4() {
-        let bytes = [0x00, 0x04];
-        let mut reader = BinaryReader::new(&bytes);
-        let pkt = ServerBoundSetHeldItemPacket::decode(&mut reader, ProtocolVersion::V1_20_5)
-            .expect("decode");
-        assert_eq!(pkt.selected_slot(), 4);
-    }
-
-    #[test]
-    fn clamps_out_of_range_slot() {
-        let bytes = [0x00, 0x09]; // slot 9 is invalid
-        let mut reader = BinaryReader::new(&bytes);
-        let pkt = ServerBoundSetHeldItemPacket::decode(&mut reader, ProtocolVersion::V1_20_5)
-            .expect("decode");
-        assert_eq!(pkt.selected_slot(), 0);
+    fn decodes_slot_and_clamps_out_of_range() {
+        let mut reader = BinaryReader::new(&[0x00, 0x04]);
+        assert_eq!(
+            ServerBoundSetHeldItemPacket::decode(&mut reader, ProtocolVersion::V1_20_5)
+                .unwrap()
+                .selected_slot(),
+            4
+        );
+        // slot 9 is out of the 0–8 range and clamps to 0
+        let mut reader = BinaryReader::new(&[0x00, 0x09]);
+        assert_eq!(
+            ServerBoundSetHeldItemPacket::decode(&mut reader, ProtocolVersion::V1_20_5)
+                .unwrap()
+                .selected_slot(),
+            0
+        );
     }
 }

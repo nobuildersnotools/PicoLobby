@@ -42,21 +42,12 @@ mod tests {
     }
 
     #[test]
-    fn latest_player_input_decodes_shift_flag() {
-        let packet = decode(&[0x20], ProtocolVersion::V26_1);
-
-        assert_eq!(packet.shift(), Some(true));
-
-        let packet = decode(&[0x40], ProtocolVersion::V26_1);
-
-        assert_eq!(packet.shift(), Some(false));
-    }
-
-    #[test]
-    fn v1_21_9_player_input_decodes_shift_flag() {
-        let packet = decode(&[0x20], ProtocolVersion::V1_21_9);
-
-        assert_eq!(packet.shift(), Some(true));
+    fn modern_shift_flag_decoded_for_v1_21_9_and_later() {
+        // Both V1_21_9 and V26_1 use the compact flags byte; 0x20 = shift bit set.
+        for version in [ProtocolVersion::V1_21_9, ProtocolVersion::V26_1] {
+            assert_eq!(decode(&[0x20], version).shift(), Some(true), "{version:?}");
+            assert_eq!(decode(&[0x40], version).shift(), Some(false), "{version:?}");
+        }
     }
 
     #[test]
@@ -65,7 +56,6 @@ mod tests {
             &[0x3f, 0x80, 0, 0, 0xbf, 0x80, 0, 0, 0x03],
             ProtocolVersion::V1_21,
         );
-
         assert_eq!(packet.shift(), None);
     }
 }

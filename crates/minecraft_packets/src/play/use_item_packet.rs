@@ -34,19 +34,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn decodes_main_hand() {
-        let bytes = [0x00]; // VarInt 0 = main hand
-        let mut reader = BinaryReader::new(&bytes);
-        let pkt = UseItemPacket::decode(&mut reader, ProtocolVersion::V1_18_2).expect("decode");
-        assert!(pkt.is_main_hand());
-    }
+    fn decodes_hand_selection() {
+        let mut reader = BinaryReader::new(&[0x00]); // VarInt 0 = main hand
+        assert!(
+            UseItemPacket::decode(&mut reader, ProtocolVersion::V1_18_2)
+                .unwrap()
+                .is_main_hand()
+        );
 
-    #[test]
-    fn decodes_off_hand() {
-        let bytes = [0x01]; // VarInt 1 = off hand
-        let mut reader = BinaryReader::new(&bytes);
-        let pkt = UseItemPacket::decode(&mut reader, ProtocolVersion::V1_18_2).expect("decode");
-        assert!(!pkt.is_main_hand());
+        let mut reader = BinaryReader::new(&[0x01]); // VarInt 1 = off hand
+        assert!(
+            !UseItemPacket::decode(&mut reader, ProtocolVersion::V1_18_2)
+                .unwrap()
+                .is_main_hand()
+        );
     }
 
     #[test]

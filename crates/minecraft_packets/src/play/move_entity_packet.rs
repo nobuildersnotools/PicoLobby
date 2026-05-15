@@ -228,39 +228,34 @@ mod tests {
     }
 
     #[test]
-    fn converts_relative_position_delta_to_protocol_units() {
-        let delta = RelativeMoveDelta::between((1.0, 2.0, 3.0), (1.5, 1.75, 3.125)).unwrap();
-
-        assert_eq!(delta, RelativeMoveDelta::new_unchecked(2048, -1024, 512));
-    }
-
-    #[test]
-    fn accepts_legacy_relative_position_delta_within_byte_range() {
-        let delta = RelativeMoveDelta::between_for_version(
-            (1.0, 2.0, 3.0),
-            (1.5, 1.75, 3.125),
-            ProtocolVersion::V1_8,
-        )
-        .unwrap();
-
-        assert_eq!(delta, RelativeMoveDelta::new_unchecked(2048, -1024, 512));
-    }
-
-    #[test]
-    fn rejects_relative_position_delta_outside_i16_range() {
-        let result = RelativeMoveDelta::between((0.0, 0.0, 0.0), (8.1, 0.0, 0.0));
-
-        assert_eq!(result, Err(RelativeMoveDeltaError::OutOfRange));
-    }
-
-    #[test]
-    fn rejects_legacy_relative_position_delta_outside_byte_range() {
-        let result = RelativeMoveDelta::between_for_version(
-            (0.0, 0.0, 0.0),
-            (4.0, 0.0, 0.0),
-            ProtocolVersion::V1_8,
+    fn relative_move_delta_converts_and_validates_both_eras() {
+        // Modern (1.9+): scaled by 4096, stored as i16.
+        assert_eq!(
+            RelativeMoveDelta::between((1.0, 2.0, 3.0), (1.5, 1.75, 3.125)).unwrap(),
+            RelativeMoveDelta::new_unchecked(2048, -1024, 512)
+        );
+        assert_eq!(
+            RelativeMoveDelta::between((0.0, 0.0, 0.0), (8.1, 0.0, 0.0)),
+            Err(RelativeMoveDeltaError::OutOfRange)
         );
 
-        assert_eq!(result, Err(RelativeMoveDeltaError::OutOfRange));
+        // Legacy (≤1.8): also scaled by 4096 internally, but validated against i8 range.
+        assert_eq!(
+            RelativeMoveDelta::between_for_version(
+                (1.0, 2.0, 3.0),
+                (1.5, 1.75, 3.125),
+                ProtocolVersion::V1_8
+            )
+            .unwrap(),
+            RelativeMoveDelta::new_unchecked(2048, -1024, 512)
+        );
+        assert_eq!(
+            RelativeMoveDelta::between_for_version(
+                (0.0, 0.0, 0.0),
+                (4.0, 0.0, 0.0),
+                ProtocolVersion::V1_8
+            ),
+            Err(RelativeMoveDeltaError::OutOfRange)
+        );
     }
 }

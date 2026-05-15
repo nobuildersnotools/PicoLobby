@@ -69,53 +69,44 @@ mod tests {
     }
 
     #[test]
-    fn pre_1_9_uses_byte_window_id_and_no_state_id() {
-        let pkt = SetContainerSlotPacket::hotbar(0, LobbySlot::empty());
-        let bytes = encode(pkt, ProtocolVersion::V1_8);
-        // [window_id=0 (byte), slot=36 (short), empty_slot]
-        assert_eq!(bytes[0], 0x00); // window_id as byte
-        assert_eq!(bytes[1], 0x00); // slot high byte
-        assert_eq!(bytes[2], 0x24); // slot low byte (36)
-        // no state_id
-        assert_eq!(bytes.len(), 5); // 1 + 2 + 2 (short -1 for empty)
+    fn pre_1_9_uses_byte_window_id_no_state_id() {
+        let bytes = encode(
+            SetContainerSlotPacket::hotbar(0, LobbySlot::empty()),
+            ProtocolVersion::V1_8,
+        );
+        // Byte window_id, Short slot(36), empty slot (-1 as Short)
+        assert_eq!(&bytes[..3], &[0x00, 0x00, 0x24]);
+        assert_eq!(bytes.len(), 5);
     }
 
     #[test]
-    fn modern_uses_varint_window_and_state_id() {
-        let pkt = SetContainerSlotPacket::hotbar(0, LobbySlot::empty());
-        let bytes = encode(pkt, ProtocolVersion::V1_20_5);
-        assert_eq!(bytes[0], 0x00); // VarInt(0) window_id
-        assert_eq!(bytes[1], 0x00); // VarInt(0) state_id
-        assert_eq!(bytes[2], 0x00); // slot high byte
-        assert_eq!(bytes[3], 0x24); // slot low byte (36)
-        // empty slot = VarInt(0)
-        assert_eq!(bytes[4], 0x00);
-    }
-
-    #[test]
-    fn v1_17_has_no_state_id() {
-        let pkt = SetContainerSlotPacket::hotbar(4, LobbySlot::empty());
-        let bytes = encode(pkt, ProtocolVersion::V1_17);
-        assert_eq!(bytes[0], 0x00); // VarInt(0) window_id
-        assert_eq!(bytes[1], 0x00); // slot high byte
-        assert_eq!(bytes[2], 0x28); // slot low byte (40)
-        assert_eq!(bytes[3], 0x00); // empty slot
+    fn state_id_absent_before_v1_17_1_present_after() {
+        // V1_17: no state_id — bytes are window_id, slot_hi, slot_lo(0x28=40), empty
+        let bytes = encode(
+            SetContainerSlotPacket::hotbar(4, LobbySlot::empty()),
+            ProtocolVersion::V1_17,
+        );
+        assert_eq!(&bytes[..3], &[0x00, 0x00, 0x28]);
         assert_eq!(bytes.len(), 4);
+
+        // V1_17_1 and later: state_id VarInt inserted after window_id
+        for version in [ProtocolVersion::V1_17_1, ProtocolVersion::V1_20_5] {
+            let bytes = encode(
+                SetContainerSlotPacket::hotbar(4, LobbySlot::empty()),
+                version,
+            );
+            assert_eq!(
+                &bytes[..4],
+                &[0x00, 0x00, 0x00, 0x28],
+                "state_id missing for {version:?}"
+            );
+        }
     }
 
     #[test]
-    fn v1_17_1_adds_state_id_before_slot() {
-        let pkt = SetContainerSlotPacket::hotbar(4, LobbySlot::empty());
-        let bytes = encode(pkt, ProtocolVersion::V1_17_1);
-        assert_eq!(bytes[0], 0x00); // VarInt(0) window_id
-        assert_eq!(bytes[1], 0x00); // VarInt(0) state_id
-        assert_eq!(bytes[2], 0x00); // slot high byte
-        assert_eq!(bytes[3], 0x28); // slot low byte (40)
-        assert_eq!(bytes[4], 0x00); // empty slot
-    }
-
-    #[test]
-    fn hotbar_slot_4_maps_to_container_slot_40() {
+    fn hotbar_slot_maps_to_container_slot_36_plus_n() {
+        assert_eq!(SetContainerSlotPacket::container_slot(0), 36);
         assert_eq!(SetContainerSlotPacket::container_slot(4), 40);
+        assert_eq!(SetContainerSlotPacket::container_slot(8), 44);
     }
 }
