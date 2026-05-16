@@ -3,7 +3,7 @@ use crate::server::lobby_chat::chat_packets_for_plan;
 use crate::server::lobby_visibility::{
     join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
     leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
-    npc_spawn_packets_for_join,
+    npc_spawn_packets_for_join, swing_visibility_batches,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
@@ -11,7 +11,8 @@ use crate::server::packet_registry::{
 };
 use crate::server::shutdown_signal::shutdown_signal;
 use crate::server_state::{
-    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId, ServerState,
+    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId, LobbySwingPlan,
+    ServerState,
 };
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
@@ -210,6 +211,7 @@ async fn process_packet(
 
     let pending_metadata_plan = client_state.take_pending_metadata_plan();
     let pending_movement_plan = client_state.take_pending_movement_plan();
+    let pending_swing_plan = client_state.take_pending_swing_plan();
     let pending_chat_plan = client_state.take_pending_chat_plan();
 
     if let Some(reason) = client_state.should_kick() {
@@ -228,6 +230,10 @@ async fn process_packet(
 
     if let Some(plan) = pending_movement_plan {
         broadcast_movement(&plan, server_state).await;
+    }
+
+    if let Some(plan) = pending_swing_plan {
+        broadcast_swing(&plan, server_state).await;
     }
 
     if let Some(plan) = pending_chat_plan {
@@ -331,6 +337,32 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
 
 async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<ServerState>>) {
     let batches = metadata_visibility_batches(plan);
+    if batches.is_empty() {
+        return;
+    }
+
+    let server_state_guard = server_state.read().await;
+    let senders: HashMap<_, _> = server_state_guard
+        .collect_lobby_broadcast_senders(&plan.recipients)
+        .into_iter()
+        .collect();
+    drop(server_state_guard);
+
+    for batch in batches {
+        let session_id = batch.recipient.session_id;
+        let version = batch.recipient.protocol_version;
+        if let Some(sender) = senders.get(&session_id) {
+            for packet in batch.packets {
+                if let Ok(raw_packet) = packet.encode_packet(version) {
+                    let _ = sender.send(raw_packet);
+                }
+            }
+        }
+    }
+}
+
+async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<ServerState>>) {
+    let batches = swing_visibility_batches(plan);
     if batches.is_empty() {
         return;
     }

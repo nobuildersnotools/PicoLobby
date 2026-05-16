@@ -1,8 +1,9 @@
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{
     EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc,
-    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySession,
+    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySwingPlan,
 };
+use minecraft_packets::play::animate_packet::AnimatePacket;
 use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
 use minecraft_packets::play::move_entity_packet::{
     MoveEntityPosPacket, MoveEntityPosRotPacket, MoveEntityRotPacket, RelativeMoveDelta,
@@ -32,6 +33,12 @@ pub struct LobbyMovementPacketBatch {
 }
 
 pub struct LobbyMetadataPacketBatch {
+    #[allow(dead_code)]
+    pub recipient: LobbyRecipient,
+    pub packets: Vec<PacketRegistry>,
+}
+
+pub struct LobbySwingPacketBatch {
     #[allow(dead_code)]
     pub recipient: LobbyRecipient,
     pub packets: Vec<PacketRegistry>,
@@ -220,6 +227,27 @@ pub fn metadata_visibility_packets(plan: &LobbyMetadataPlan) -> Vec<PacketRegist
     vec![PacketRegistry::SetEntityMetadata(player_metadata_packet(
         plan.entity_id.get(),
         plan.crouching,
+    ))]
+}
+
+pub fn swing_visibility_batches(plan: &LobbySwingPlan) -> Vec<LobbySwingPacketBatch> {
+    plan.recipients
+        .iter()
+        .filter(|recipient| {
+            recipient
+                .protocol_version
+                .is_after_inclusive(ProtocolVersion::V1_7_2)
+        })
+        .map(|recipient| LobbySwingPacketBatch {
+            recipient: recipient.clone(),
+            packets: swing_visibility_packets(plan.swinging_entity_id),
+        })
+        .collect()
+}
+
+pub fn swing_visibility_packets(swinging_entity_id: EntityId) -> Vec<PacketRegistry> {
+    vec![PacketRegistry::Animate(AnimatePacket::main_hand(
+        swinging_entity_id.get(),
     ))]
 }
 
@@ -497,6 +525,14 @@ mod tests {
         }
     }
 
+    fn swing_plan(recipients: Vec<LobbyRecipient>) -> LobbySwingPlan {
+        LobbySwingPlan {
+            swinging_session_id: LobbySessionId::new(99),
+            swinging_entity_id: EntityId::new(300),
+            recipients,
+        }
+    }
+
     #[test]
     fn empty_recipient_list_yields_no_packet_batches() {
         assert!(leave_visibility_batches(&plan(Vec::new())).is_empty());
@@ -536,6 +572,8 @@ mod tests {
 
     #[test]
     fn leave_visibility_packets_encode_per_version_bucket() {
+        type LeaveEncodingCase = (ProtocolVersion, u8, &'static [u8], u8, &'static [u8]);
+
         // (version, entity_remove_id, entity_remove_data, player_info_id, player_info_data)
         const V1_7_2_ENTITY_DATA: &[u8] = &[1, 0, 0, 1, 44]; // int entity_id
         const VARINT_ENTITY_DATA: &[u8] = &[1, 172, 2]; // varint 300
@@ -544,7 +582,7 @@ mod tests {
         const LEGACY_INFO_DATA: &[u8] = &[4, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
         const CURRENT_INFO_DATA: &[u8] = &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 99];
 
-        let cases: &[(ProtocolVersion, u8, &[u8], u8, &[u8])] = &[
+        let cases: &[LeaveEncodingCase] = &[
             (
                 ProtocolVersion::V1_7_2,
                 19,
@@ -620,6 +658,41 @@ mod tests {
             let raw = packets.remove(1).encode_packet(version).unwrap();
             assert_eq!(raw.packet_id(), Some(info_id), "{version:?} player info id");
             assert_eq!(raw.data(), info_data, "{version:?} player info data");
+        }
+    }
+
+    #[test]
+    fn swing_visibility_batches_send_one_animate_per_recipient() {
+        let batches = swing_visibility_batches(&swing_plan(vec![
+            recipient(1, ProtocolVersion::V1_8),
+            recipient(2, ProtocolVersion::V1_19_4),
+            recipient(3, ProtocolVersion::V26_1),
+        ]));
+
+        assert_eq!(batches.len(), 3);
+        assert!(
+            batches
+                .iter()
+                .all(|batch| matches!(batch.packets.as_slice(), [PacketRegistry::Animate(_)]))
+        );
+    }
+
+    #[test]
+    fn swing_visibility_packets_encode_for_legacy_mid_modern_and_latest() {
+        for (version, expected_id, expected_data) in [
+            (ProtocolVersion::V1_7_2, 0x0b, &[0, 0, 1, 44, 0][..]),
+            (ProtocolVersion::V1_8, 0x0b, &[172, 2, 0][..]),
+            (ProtocolVersion::V1_12_2, 0x06, &[172, 2, 0][..]),
+            (ProtocolVersion::V1_19_4, 0x04, &[172, 2, 0][..]),
+            (ProtocolVersion::V1_20_5, 0x03, &[172, 2, 0][..]),
+            (ProtocolVersion::V1_21, 0x03, &[172, 2, 0][..]),
+            (ProtocolVersion::V1_21_4, 0x03, &[172, 2, 0][..]),
+            (ProtocolVersion::V26_1, 0x02, &[172, 2, 0][..]),
+        ] {
+            let packet = swing_visibility_packets(EntityId::new(300)).pop().unwrap();
+            let raw = packet.encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?}");
+            assert_eq!(raw.data(), expected_data, "{version:?}");
         }
     }
 

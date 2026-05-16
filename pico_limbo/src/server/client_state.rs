@@ -1,7 +1,7 @@
 use crate::server::game_profile::GameProfile;
 use crate::server_state::{
     ChatVisibility, LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId,
-    OpenSelectorState,
+    LobbySwingPlan, OpenSelectorState,
 };
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
@@ -31,6 +31,7 @@ impl Default for ClientState {
             last_chat_message_at: None,
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
+            pending_lobby_swing_plan: None,
             position: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0),
             is_flight_allowed: false,
@@ -57,6 +58,7 @@ pub struct ClientState {
     last_chat_message_at: Option<Instant>,
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
+    pending_lobby_swing_plan: Option<LobbySwingPlan>,
     position: (f64, f64, f64),
     rotation: (f32, f32),
     is_flight_allowed: bool,
@@ -214,6 +216,14 @@ impl ClientState {
 
     pub const fn take_pending_movement_plan(&mut self) -> Option<LobbyMovementPlan> {
         self.pending_lobby_movement_plan.take()
+    }
+
+    pub fn set_pending_swing_plan(&mut self, plan: LobbySwingPlan) {
+        self.pending_lobby_swing_plan = Some(plan);
+    }
+
+    pub const fn take_pending_swing_plan(&mut self) -> Option<LobbySwingPlan> {
+        self.pending_lobby_swing_plan.take()
     }
 
     // Keep alive

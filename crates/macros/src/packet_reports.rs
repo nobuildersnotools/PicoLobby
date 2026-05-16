@@ -398,6 +398,14 @@ fn clientbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
         (762 | 763, "minecraft:player_info_remove") => Some(0x39),
         (764 | 765, "minecraft:player_info_remove") => Some(0x3b),
         (766, "minecraft:player_info_remove") => Some(0x3d),
+        // animate (entity animation) is missing from generated reports before 1.21.
+        (4 | 47, "minecraft:animate") => Some(0x0b),
+        (107 | 110 | 210 | 315 | 335 | 338, "minecraft:animate") => Some(0x06),
+        (
+            393 | 477 | 573 | 735 | 751 | 755 | 757 | 759 | 760 | 761 | 762 | 763,
+            "minecraft:animate",
+        ) => Some(0x04),
+        (764..=766, "minecraft:animate") => Some(0x03),
         _ => None,
     }
 }
@@ -469,6 +477,17 @@ fn serverbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
         // confirm_transaction (serverbound, legacy inventory acknowledgement)
         (4 | 47, "minecraft:legacy_confirm_transaction") => Some(0x0f),
         (107 | 110 | 210 | 315 | 335 | 338, "minecraft:legacy_confirm_transaction") => Some(0x05),
+        // swing (formerly arm_animation) is missing from generated reports before 1.21.
+        (4 | 47, "minecraft:swing") => Some(0x0a),
+        (107 | 110, "minecraft:swing") => Some(0x1a),
+        (210 | 315 | 335 | 338, "minecraft:swing") => Some(0x1d),
+        (393, "minecraft:swing") => Some(0x1e),
+        (477 | 573, "minecraft:swing") => Some(0x2a),
+        (735, "minecraft:swing") => Some(0x2b),
+        (751 | 755 | 757, "minecraft:swing") => Some(0x2c),
+        (759, "minecraft:swing") => Some(0x2e),
+        (760..=763, "minecraft:swing") => Some(0x2f),
+        (766, "minecraft:swing") => Some(0x36),
         _ => None,
     }
 }

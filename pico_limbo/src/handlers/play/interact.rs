@@ -21,7 +21,11 @@ impl PacketHandler for InteractPacket {
             return Ok(Batch::new());
         }
 
-        handle_npc_interaction(client_state, server_state, self.target_entity_id())
+        Ok(handle_npc_interaction(
+            client_state,
+            server_state,
+            self.target_entity_id(),
+        ))
     }
 }
 
@@ -31,21 +35,25 @@ impl PacketHandler for AttackPacket {
         client_state: &mut ClientState,
         server_state: &ServerState,
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
-        handle_npc_interaction(client_state, server_state, self.target_entity_id())
+        Ok(handle_npc_interaction(
+            client_state,
+            server_state,
+            self.target_entity_id(),
+        ))
     }
 }
 
 fn handle_npc_interaction(
-    client_state: &mut ClientState,
+    client_state: &ClientState,
     server_state: &ServerState,
     target_entity_id: i32,
-) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
+) -> Batch<PacketRegistry> {
     let Some(interaction) = server_state.plan_lobby_npc_interaction(
         client_state,
         target_entity_id,
         NPC_INTERACTION_RANGE,
     ) else {
-        return Ok(Batch::new());
+        return Batch::new();
     };
 
     let version = client_state.protocol_version();
@@ -60,14 +68,14 @@ fn handle_npc_interaction(
             let packet = PlayClientBoundPluginMessagePacket::bungeecord_connect(&dest.server);
             let mut batch = Batch::new();
             batch.queue(|| PacketRegistry::PlayClientBoundPluginMessage(packet));
-            Ok(batch)
+            batch
         }
         Err(err) => {
             warn!("{}: {}", client_state.get_username(), err);
             let msg = format!("Unknown server: {}", interaction.destination_id);
             let mut batch = Batch::new();
             batch.queue(move || chat_feedback_packet(version, &msg));
-            Ok(batch)
+            batch
         }
     }
 }

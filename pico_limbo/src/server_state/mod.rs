@@ -9,7 +9,7 @@ pub use lobby::{
     ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
     LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction, LobbyNpcKind, LobbyNpcSpawnPlan,
     LobbyNpcValidationError, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId,
-    LobbyState,
+    LobbyState, LobbySwingPlan,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
@@ -420,6 +420,15 @@ impl ServerState {
 
         self.lobby_state()
             .update_crouching_with_metadata_plan(EntityId::new(client_state.entity_id()), crouching)
+    }
+
+    pub fn plan_lobby_swing_broadcast(&self, client_state: &ClientState) -> Option<LobbySwingPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+
+        self.lobby_state()
+            .plan_swing_broadcast(EntityId::new(client_state.entity_id()))
     }
 
     pub fn update_lobby_chat_visibility(&self, client_state: &ClientState) -> bool {

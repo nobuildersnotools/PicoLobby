@@ -20,6 +20,7 @@ use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
 use minecraft_packets::login::login_state_packet::LoginStartPacket;
 use minecraft_packets::login::login_success_packet::LoginSuccessPacket;
 use minecraft_packets::login::set_compression_packet::SetCompressionPacket;
+use minecraft_packets::play::animate_packet::AnimatePacket;
 use minecraft_packets::play::attack_packet::AttackPacket;
 use minecraft_packets::play::boss_bar_packet::BossBarPacket;
 use minecraft_packets::play::chat_command_packet::ChatCommandPacket;
@@ -67,6 +68,7 @@ use minecraft_packets::play::set_title_text_packet::SetTitleTextPacket;
 use minecraft_packets::play::set_titles_animation::SetTitlesAnimationPacket;
 use minecraft_packets::play::spawn_entity_packet::SpawnEntityPacket;
 use minecraft_packets::play::spawn_player_packet::SpawnPlayerPacket;
+use minecraft_packets::play::swing_packet::SwingPacket;
 use minecraft_packets::play::synchronize_player_position_packet::SynchronizePlayerPositionPacket;
 use minecraft_packets::play::system_chat_message_packet::SystemChatMessagePacket;
 use minecraft_packets::play::tab_list_packet::TabListPacket;
@@ -391,6 +393,9 @@ pub enum PacketRegistry {
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:rotate_head")]
     RotateHead(RotateHeadPacket),
 
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:animate")]
+    Animate(AnimatePacket),
+
     #[protocol_id(
         state = "play",
         bound = "clientbound",
@@ -541,6 +546,9 @@ pub enum PacketRegistry {
     #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:attack")]
     Attack(AttackPacket),
 
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:swing")]
+    Swing(SwingPacket),
+
     #[protocol_id(
         state = "play",
         bound = "serverbound",
@@ -595,6 +603,7 @@ impl PacketHandler for PacketRegistry {
             }
             Self::Interact(packet) => packet.handle(client_state, server_state),
             Self::Attack(packet) => packet.handle(client_state, server_state),
+            Self::Swing(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }
@@ -1511,6 +1520,51 @@ mod tests {
                     assert!(!p.accepted, "{version:?}");
                 }
                 _ => panic!("expected ConfirmTransaction for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn encodes_animate_packet_ids_across_versions() {
+        use minecraft_packets::play::animate_packet::AnimatePacket;
+
+        for (version, expected_id) in [
+            (ProtocolVersion::V1_7_2, 0x0b),
+            (ProtocolVersion::V1_8, 0x0b),
+            (ProtocolVersion::V1_9, 0x06),
+            (ProtocolVersion::V1_12_2, 0x06),
+            (ProtocolVersion::V1_19_4, 0x04),
+            (ProtocolVersion::V1_20_5, 0x03),
+            (ProtocolVersion::V1_21, 0x03),
+            (ProtocolVersion::V1_21_4, 0x03),
+            (ProtocolVersion::V26_1, 0x02),
+        ] {
+            let packet = PacketRegistry::Animate(AnimatePacket::main_hand(300));
+            let raw = packet.encode_packet(version).unwrap();
+            assert_eq!(raw.packet_id(), Some(expected_id), "{version:?}");
+        }
+    }
+
+    #[test]
+    fn decodes_swing_packet_ids_across_versions() {
+        for (version, packet_id, data) in [
+            (ProtocolVersion::V1_7_2, 0x0a, &[0, 0, 1, 44, 1][..]),
+            (ProtocolVersion::V1_8, 0x0a, &[][..]),
+            (ProtocolVersion::V1_9, 0x1a, &[0][..]),
+            (ProtocolVersion::V1_12_2, 0x1d, &[0][..]),
+            (ProtocolVersion::V1_19_4, 0x2f, &[0][..]),
+            (ProtocolVersion::V1_20_5, 0x36, &[0][..]),
+            (ProtocolVersion::V1_21, 0x36, &[0][..]),
+            (ProtocolVersion::V1_21_4, 0x3a, &[0][..]),
+            (ProtocolVersion::V26_1, 0x3f, &[0][..]),
+        ] {
+            let raw = RawPacket::from_bytes(packet_id, data);
+            let pkt = PacketRegistry::decode_packet(version, State::Play, raw).unwrap();
+            match pkt {
+                PacketRegistry::Swing(packet) => {
+                    assert!(packet.triggers_main_hand_swing(300, version), "{version:?}");
+                }
+                _ => panic!("expected Swing for {version:?}"),
             }
         }
     }

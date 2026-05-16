@@ -339,16 +339,16 @@ mod tests {
     #[test]
     fn classify_stale_state_id_version_behavior() {
         let state = open_state_with_two_dests(); // state_id = 1
-        let stale = make_click(0, 0, 0, 0); // state_id = 0
+        let stale_click = make_click(0, 0, 0, 0); // state_id = 0
 
         // 1.17.1+: stale state_id → resync
         assert!(matches!(
-            state.classify(&stale, ProtocolVersion::V1_17_1),
+            state.classify(&stale_click, ProtocolVersion::V1_17_1),
             SelectorClick::RequiresResync
         ));
         // pre-1.17.1: state_id ignored → select
         assert!(matches!(
-            state.classify(&stale, ProtocolVersion::V1_12_2),
+            state.classify(&stale_click, ProtocolVersion::V1_12_2),
             SelectorClick::Select { slot_index: 0 }
         ));
     }

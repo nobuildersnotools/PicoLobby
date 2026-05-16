@@ -1,3 +1,4 @@
+pub mod animate_packet;
 pub mod attack_packet;
 pub mod boss_bar_packet;
 pub mod chat_command_packet;
@@ -45,6 +46,7 @@ pub mod set_title_text_packet;
 pub mod set_titles_animation;
 pub mod spawn_entity_packet;
 pub mod spawn_player_packet;
+pub mod swing_packet;
 pub mod synchronize_player_position_packet;
 pub mod system_chat_message_packet;
 pub mod tab_list_packet;

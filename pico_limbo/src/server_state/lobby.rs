@@ -217,6 +217,13 @@ pub struct LobbyMetadataPlan {
     pub recipients: Vec<LobbyRecipient>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbySwingPlan {
+    pub swinging_session_id: LobbySessionId,
+    pub swinging_entity_id: EntityId,
+    pub recipients: Vec<LobbyRecipient>,
+}
+
 #[derive(Clone)]
 pub struct LobbyJoinPlan {
     pub new_session: LobbySession,
@@ -448,6 +455,17 @@ impl LobbyState {
             session_id,
             entity_id,
             crouching,
+            recipients,
+        })
+    }
+
+    pub fn plan_swing_broadcast(&self, entity_id: EntityId) -> Option<LobbySwingPlan> {
+        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let session = self.sessions_by_uuid.get(uuid)?;
+        let recipients = self.plan_recipients(Some(session.session_id));
+        Some(LobbySwingPlan {
+            swinging_session_id: session.session_id,
+            swinging_entity_id: entity_id,
             recipients,
         })
     }
@@ -965,6 +983,53 @@ mod tests {
                 .session_by_entity_id(moving.entity_id)
                 .unwrap()
                 .crouching
+        );
+    }
+
+    #[test]
+    fn swing_plan_excludes_sender_and_preserves_sorted_recipient_versions() {
+        let mut state = LobbyState::new();
+        let swinger = state.insert(session(Uuid::from_u128(1), "swinger"));
+        let mut old_session = session(Uuid::from_u128(2), "old");
+        old_session.protocol_version = ProtocolVersion::V1_8;
+        let old = state.insert(old_session);
+        let modern = state.insert(session(Uuid::from_u128(3), "modern"));
+
+        let plan = state.plan_swing_broadcast(swinger.entity_id).unwrap();
+
+        assert_eq!(plan.swinging_session_id, swinger.session_id);
+        assert_eq!(plan.swinging_entity_id, swinger.entity_id);
+        assert!(
+            !plan
+                .recipients
+                .iter()
+                .any(|r| r.session_id == swinger.session_id)
+        );
+        assert_eq!(
+            plan.recipients,
+            vec![
+                LobbyRecipient {
+                    session_id: old.session_id,
+                    uuid: old.uuid,
+                    entity_id: old.entity_id,
+                    protocol_version: ProtocolVersion::V1_8,
+                },
+                LobbyRecipient {
+                    session_id: modern.session_id,
+                    uuid: modern.uuid,
+                    entity_id: modern.entity_id,
+                    protocol_version: ProtocolVersion::V1_20_5,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn swing_plan_for_unknown_entity_is_empty() {
+        assert!(
+            LobbyState::new()
+                .plan_swing_broadcast(EntityId::new(99))
+                .is_none()
         );
     }
 
