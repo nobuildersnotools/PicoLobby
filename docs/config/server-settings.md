@@ -39,6 +39,29 @@ welcome_message = ""
 ```
 :::
 
+## Lobby Join/Leave Messages
+
+Lobby join and leave messages are broadcast to lobby players when `[lobby].enabled = true`.
+They support [MiniMessage formatting](/customization/message-formatting.html) and the `{player}` placeholder.
+
+:::code-group
+```toml [server.toml]
+[lobby]
+join_message = "<yellow>{player} joined the game</yellow>"
+leave_message = "<yellow>{player} left the game</yellow>"
+```
+:::
+
+Either message can be disabled by setting it to an empty string:
+
+:::code-group
+```toml [server.toml]
+[lobby]
+join_message = ""
+leave_message = ""
+```
+:::
+
 ## Action Bar <Badge type="warning" text="1.8+" />
 
 Action bar message is displayed to players after joining above the hotbar.

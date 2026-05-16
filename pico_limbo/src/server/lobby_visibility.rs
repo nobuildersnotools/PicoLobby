@@ -507,6 +507,7 @@ mod tests {
             departed_uuid: Uuid::from_u128(99),
             departed_username: DEPARTED_NAME.to_owned(),
             departed_entity_id: EntityId::new(300),
+            lifecycle_message_recipients: recipients.clone(),
             recipients,
         }
     }

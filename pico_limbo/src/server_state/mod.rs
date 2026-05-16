@@ -6,10 +6,10 @@ use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
 use base64::{Engine, alphabet, engine};
 pub use lobby::{
-    ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan,
-    LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction, LobbyNpcKind, LobbyNpcSpawnPlan,
-    LobbyNpcValidationError, LobbyPosition, LobbyRecipient, LobbySession, LobbySessionId,
-    LobbyState, LobbySwingPlan,
+    ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan,
+    LobbyLifecycleMessagePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction,
+    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyNpcValidationError, LobbyPosition, LobbyRecipient,
+    LobbySession, LobbySessionId, LobbyState, LobbySwingPlan,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
@@ -106,6 +106,8 @@ pub struct ServerState {
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_join_message: Option<String>,
+    lobby_leave_message: Option<String>,
     lobby_destinations: Vec<LobbyDestination>,
     lobby_selector: Option<LobbySelector>,
     lobby_state: Arc<Mutex<LobbyState>>,
@@ -460,6 +462,31 @@ impl ServerState {
         Some(plan)
     }
 
+    pub fn plan_lobby_join_message(
+        &self,
+        session_id: LobbySessionId,
+    ) -> Option<LobbyLifecycleMessagePlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+        self.lobby_state()
+            .plan_lifecycle_message(session_id, self.lobby_join_message.clone()?)
+    }
+
+    pub fn plan_lobby_leave_message(
+        &self,
+        leave_plan: &LobbyLeavePlan,
+    ) -> Option<LobbyLifecycleMessagePlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+        Some(LobbyLifecycleMessagePlan {
+            player_username: leave_plan.departed_username.clone(),
+            template: self.lobby_leave_message.clone()?,
+            recipients: leave_plan.lifecycle_message_recipients.clone(),
+        })
+    }
+
     pub fn plan_lobby_join(&self, session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
         if !self.lobby_enabled {
             return None;
@@ -535,6 +562,8 @@ pub struct ServerStateBuilder {
     welcome_message: String,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_join_message: String,
+    lobby_leave_message: String,
     lobby_destinations: Vec<LobbyDestination>,
     lobby_npcs: Vec<LobbyNpc>,
     lobby_selector: Option<LobbySelector>,
@@ -673,6 +702,16 @@ impl ServerStateBuilder {
 
     pub fn set_lobby_chat_format<S: Into<String>>(&mut self, format: S) -> &mut Self {
         self.lobby_chat_format = format.into();
+        self
+    }
+
+    pub fn set_lobby_join_message<S: Into<String>>(&mut self, message: S) -> &mut Self {
+        self.lobby_join_message = message.into();
+        self
+    }
+
+    pub fn set_lobby_leave_message<S: Into<String>>(&mut self, message: S) -> &mut Self {
+        self.lobby_leave_message = message.into();
         self
     }
 
@@ -941,6 +980,8 @@ impl ServerStateBuilder {
             connected_clients: Arc::new(AtomicU32::new(0)),
             lobby_enabled: self.lobby_enabled,
             lobby_chat_format: self.lobby_chat_format,
+            lobby_join_message: optional_lifecycle_template(&self.lobby_join_message)?,
+            lobby_leave_message: optional_lifecycle_template(&self.lobby_leave_message)?,
             lobby_destinations: self.lobby_destinations,
             lobby_selector: self.lobby_selector,
             lobby_state: Arc::new(Mutex::new(LobbyState::with_npcs(self.lobby_npcs))),
@@ -976,6 +1017,15 @@ fn optional_mini_message(content: &str) -> Result<Option<Component>, MiniMessage
         Some(parse_mini_message(content)?)
     };
     Ok(component)
+}
+
+fn optional_lifecycle_template(content: &str) -> Result<Option<String>, MiniMessageError> {
+    if content.is_empty() {
+        return Ok(None);
+    }
+
+    parse_mini_message(&content.replace("{player}", "Player"))?;
+    Ok(Some(content.to_string()))
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -1021,6 +1071,20 @@ mod tests {
             .set_lobby_enabled(lobby_enabled)
             .show_online_player_count(true);
         builder.build().unwrap()
+    }
+
+    #[test]
+    fn empty_lifecycle_messages_are_disabled() {
+        let mut builder = ServerState::builder();
+        builder
+            .set_lobby_enabled(true)
+            .set_lobby_join_message("")
+            .set_lobby_leave_message("");
+
+        let server_state = builder.build().unwrap();
+
+        assert!(server_state.lobby_join_message.is_none());
+        assert!(server_state.lobby_leave_message.is_none());
     }
 
     #[test]

@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CHAT_FORMAT: &str = "<white>&lt;{sender}&gt; {message}</white>";
+pub const DEFAULT_JOIN_MESSAGE: &str = "<yellow>{player} joined the game</yellow>";
+pub const DEFAULT_LEAVE_MESSAGE: &str = "<yellow>{player} left the game</yellow>";
 
 /// A downstream server reachable via the Velocity proxy.
 /// `server` must match a key in Velocity's `[servers]` block.
@@ -60,6 +62,12 @@ pub struct LobbyConfig {
     /// `MiniMessage` template for lobby chat messages.
     /// Use `{sender}` and `{message}` as placeholders; user input is automatically escaped.
     pub chat_format: String,
+    /// `MiniMessage` template for lobby join messages.
+    /// Use `{player}` as a placeholder; player names are automatically escaped.
+    pub join_message: String,
+    /// `MiniMessage` template for lobby leave messages.
+    /// Use `{player}` as a placeholder; player names are automatically escaped.
+    pub leave_message: String,
     pub servers: Vec<LobbyServerEntry>,
     /// Optional hotbar selector item.  Only active when `enabled = true`.
     pub selector: Option<SelectorItemConfig>,
@@ -72,6 +80,8 @@ impl Default for LobbyConfig {
         Self {
             enabled: false,
             chat_format: DEFAULT_CHAT_FORMAT.to_string(),
+            join_message: DEFAULT_JOIN_MESSAGE.to_string(),
+            leave_message: DEFAULT_LEAVE_MESSAGE.to_string(),
             servers: vec![LobbyServerEntry {
                 id: "survival".to_string(),
                 display_name: "Survival".to_string(),
@@ -89,5 +99,18 @@ impl Default for LobbyConfig {
                 pitch: 0.0,
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_lobby_config_includes_lifecycle_messages() {
+        let config = LobbyConfig::default();
+
+        assert_eq!(config.join_message, DEFAULT_JOIN_MESSAGE);
+        assert_eq!(config.leave_message, DEFAULT_LEAVE_MESSAGE);
     }
 }

@@ -68,6 +68,8 @@ server_icon = "server-icon.png"
 [lobby]
 enabled = false
 chat_format = "<white>&lt;{sender}&gt; {message}</white>"
+join_message = "<yellow>{player} joined the game</yellow>"
+leave_message = "<yellow>{player} left the game</yellow>"
 
 [[lobby.servers]]
 id = "survival"

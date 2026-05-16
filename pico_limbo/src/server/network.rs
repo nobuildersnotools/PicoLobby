@@ -1,5 +1,5 @@
 use crate::server::client_data::ClientData;
-use crate::server::lobby_chat::chat_packets_for_plan;
+use crate::server::lobby_chat::{chat_packets_for_plan, lifecycle_message_packets_for_plan};
 use crate::server::lobby_visibility::{
     join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
     leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
@@ -242,11 +242,24 @@ async fn process_packet(
 
     if let Some(session_id) = join_session_id {
         send_join_visibility(client_data, server_state, session_id, protocol_version).await?;
+        broadcast_join_message(server_state, session_id).await;
     }
 
     client_data.enable_keep_alive_if_needed().await;
 
     Ok(())
+}
+
+async fn broadcast_join_message(
+    server_state: &Arc<RwLock<ServerState>>,
+    session_id: LobbySessionId,
+) {
+    let server_state_guard = server_state.read().await;
+    let Some(plan) = server_state_guard.plan_lobby_join_message(session_id) else {
+        return;
+    };
+    broadcast_lifecycle_message_with_guard(&server_state_guard, &plan);
+    drop(server_state_guard);
 }
 
 async fn send_join_visibility(
@@ -413,6 +426,33 @@ async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerSt
     }
 }
 
+fn broadcast_lifecycle_message_with_guard(
+    server_state: &ServerState,
+    plan: &crate::server_state::LobbyLifecycleMessagePlan,
+) {
+    let packets = lifecycle_message_packets_for_plan(plan);
+    if packets.is_empty() {
+        return;
+    }
+
+    let recipients = packets
+        .iter()
+        .map(|(recipient, _)| recipient.clone())
+        .collect::<Vec<_>>();
+    let senders: HashMap<_, _> = server_state
+        .collect_lobby_broadcast_senders(&recipients)
+        .into_iter()
+        .collect();
+
+    for (recipient, packet) in packets {
+        if let Some(sender) = senders.get(&recipient.session_id)
+            && let Ok(raw_packet) = packet.encode_packet(recipient.protocol_version)
+        {
+            let _ = sender.send(raw_packet);
+        }
+    }
+}
+
 async fn read(
     client_data: &ClientData,
     server_state: &Arc<RwLock<ServerState>>,
@@ -506,6 +546,9 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
                         batch_count,
                         plan.departed_entity_id.get()
                     );
+                    if let Some(message_plan) = server_state_guard.plan_lobby_leave_message(&plan) {
+                        broadcast_lifecycle_message_with_guard(&server_state_guard, &message_plan);
+                    }
                 }
             } else {
                 server_state_guard.decrement();

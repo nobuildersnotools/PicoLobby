@@ -198,6 +198,7 @@ pub struct LobbyLeavePlan {
     pub departed_username: String,
     pub departed_entity_id: EntityId,
     pub recipients: Vec<LobbyRecipient>,
+    pub lifecycle_message_recipients: Vec<LobbyRecipient>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -237,6 +238,13 @@ pub struct LobbyChatPlan {
     pub sender_username: String,
     pub message: String,
     pub format: String,
+    pub recipients: Vec<LobbyRecipient>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyLifecycleMessagePlan {
+    pub player_username: String,
+    pub template: String,
     pub recipients: Vec<LobbyRecipient>,
 }
 
@@ -373,11 +381,13 @@ impl LobbyState {
     ) -> Option<LobbyLeavePlan> {
         let removed = self.remove_by_session_id(session_id)?;
         let recipients = self.plan_recipients(None);
+        let lifecycle_message_recipients = self.plan_chat_recipients();
         Some(LobbyLeavePlan {
             departed_uuid: removed.uuid,
             departed_username: removed.username,
             departed_entity_id: removed.entity_id,
             recipients,
+            lifecycle_message_recipients,
         })
     }
 
@@ -500,6 +510,20 @@ impl LobbyState {
             message: message.into(),
             format: String::new(),
             recipients,
+        })
+    }
+
+    pub fn plan_lifecycle_message(
+        &self,
+        session_id: LobbySessionId,
+        template: impl Into<String>,
+    ) -> Option<LobbyLifecycleMessagePlan> {
+        let uuid = self.session_to_uuid.get(&session_id)?;
+        let session = self.sessions_by_uuid.get(uuid)?;
+        Some(LobbyLifecycleMessagePlan {
+            player_username: session.username.clone(),
+            template: template.into(),
+            recipients: self.plan_chat_recipients(),
         })
     }
 
@@ -907,6 +931,66 @@ mod tests {
                 .recipients
                 .iter()
                 .any(|r| r.session_id == hidden.session_id)
+        );
+    }
+
+    #[test]
+    fn lifecycle_message_plan_uses_chat_visibility_rules() {
+        let mut state = LobbyState::new();
+        let joining = state.insert(session(Uuid::from_u128(1), "joining"));
+        let visible = state.insert(session(Uuid::from_u128(2), "visible"));
+        let hidden = state.insert(session(Uuid::from_u128(3), "hidden"));
+
+        state.update_chat_visibility(joining.session_id, ChatVisibility::Full);
+        state.update_chat_visibility(visible.session_id, ChatVisibility::CommandsOnly);
+        state.update_chat_visibility(hidden.session_id, ChatVisibility::Hidden);
+
+        let plan = state
+            .plan_lifecycle_message(joining.session_id, "{player} joined")
+            .expect("lifecycle plan");
+
+        assert_eq!(plan.player_username, "joining");
+        assert_eq!(plan.template, "{player} joined");
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == joining.session_id)
+        );
+        assert!(
+            plan.recipients
+                .iter()
+                .any(|r| r.session_id == visible.session_id)
+        );
+        assert!(
+            !plan
+                .recipients
+                .iter()
+                .any(|r| r.session_id == hidden.session_id)
+        );
+    }
+
+    #[test]
+    fn leave_plan_message_recipients_exclude_departed_player() {
+        let mut state = LobbyState::new();
+        let departing = state.insert(session(Uuid::from_u128(1), "departing"));
+        let remaining = state.insert(session(Uuid::from_u128(2), "remaining"));
+
+        state.update_chat_visibility(remaining.session_id, ChatVisibility::Full);
+
+        let plan = state
+            .remove_by_session_id_with_leave_plan(departing.session_id)
+            .expect("leave plan");
+
+        assert_eq!(plan.departed_username, "departing");
+        assert!(
+            !plan
+                .lifecycle_message_recipients
+                .iter()
+                .any(|r| r.session_id == departing.session_id)
+        );
+        assert_eq!(
+            plan.lifecycle_message_recipients[0].session_id,
+            remaining.session_id
         );
     }
 
