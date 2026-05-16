@@ -1,6 +1,6 @@
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
-use crate::server::lobby_chat::chat_feedback_packet;
+use crate::server::lobby_chat::plain_chat_feedback_packet;
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::ServerState;
@@ -74,7 +74,7 @@ fn handle_npc_interaction(
             warn!("{}: {}", client_state.get_username(), err);
             let msg = format!("Unknown server: {}", interaction.destination_id);
             let mut batch = Batch::new();
-            batch.queue(move || chat_feedback_packet(version, &msg));
+            batch.queue(move || plain_chat_feedback_packet(version, &msg));
             batch
         }
     }

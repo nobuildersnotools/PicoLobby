@@ -1,3 +1,4 @@
+use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
 use crate::configuration::lobby::{LobbyNpcConfig, SelectorItemConfig};
@@ -93,6 +94,29 @@ pub struct Title {
     pub fade_out: i32,
 }
 
+#[derive(Clone)]
+pub struct ChatAntispamSettings {
+    pub enabled: bool,
+    pub chat_cooldown: Duration,
+    pub message: String,
+}
+
+impl Default for ChatAntispamSettings {
+    fn default() -> Self {
+        AntispamConfig::default().into()
+    }
+}
+
+impl From<AntispamConfig> for ChatAntispamSettings {
+    fn from(config: AntispamConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            chat_cooldown: Duration::from_millis(config.chat_cooldown_ms),
+            message: config.message,
+        }
+    }
+}
+
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerState {
@@ -103,6 +127,7 @@ pub struct ServerState {
     lock_time: bool,
     max_players: u32,
     welcome_message: Option<Component>,
+    chat_antispam: ChatAntispamSettings,
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
     lobby_chat_format: String,
@@ -286,6 +311,10 @@ impl ServerState {
 
     pub const fn server_commands(&self) -> &ServerCommands {
         &self.server_commands
+    }
+
+    pub const fn chat_antispam(&self) -> &ChatAntispamSettings {
+        &self.chat_antispam
     }
 
     pub const fn lobby_enabled(&self) -> bool {
@@ -560,6 +589,7 @@ pub struct ServerStateBuilder {
     description_text: String,
     max_players: u32,
     welcome_message: String,
+    chat_antispam: ChatAntispamSettings,
     lobby_enabled: bool,
     lobby_chat_format: String,
     lobby_join_message: String,
@@ -679,6 +709,11 @@ impl ServerStateBuilder {
         S: Into<String>,
     {
         self.welcome_message = message.into();
+        self
+    }
+
+    pub fn antispam(&mut self, config: AntispamConfig) -> &mut Self {
+        self.chat_antispam = config.into();
         self
     }
 
@@ -976,6 +1011,7 @@ impl ServerStateBuilder {
             lock_time: self.lock_time,
             max_players: self.max_players,
             welcome_message: optional_mini_message(&self.welcome_message)?,
+            chat_antispam: self.chat_antispam,
             action_bar: self.action_bar,
             connected_clients: Arc::new(AtomicU32::new(0)),
             lobby_enabled: self.lobby_enabled,

@@ -42,8 +42,17 @@ pub fn chat_packet_for_version(version: ProtocolVersion, component: &Component) 
 }
 
 pub fn chat_feedback_packet(version: ProtocolVersion, message: &str) -> PacketRegistry {
+    let component = feedback_component(message);
+    chat_packet_for_version(version, &component)
+}
+
+pub fn plain_chat_feedback_packet(version: ProtocolVersion, message: &str) -> PacketRegistry {
     let component = Component::new(message);
     chat_packet_for_version(version, &component)
+}
+
+fn feedback_component(message: &str) -> Component {
+    parse_mini_message(message).unwrap_or_else(|_| Component::new(message))
 }
 
 #[allow(clippy::literal_string_with_formatting_args)]
@@ -119,5 +128,15 @@ mod tests {
 
         assert!(json.contains("Steve"));
         assert!(!json.contains("\"color\":\"red\""));
+    }
+
+    #[test]
+    fn feedback_message_supports_minimessage() {
+        let component = feedback_component("<red>Slow down.</red>");
+        let json = component.to_json();
+
+        assert!(json.contains("Slow down."));
+        assert!(json.contains("\"color\":\"red\""));
+        assert!(!json.contains("<red>"));
     }
 }

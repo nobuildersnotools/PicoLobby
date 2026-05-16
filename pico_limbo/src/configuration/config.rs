@@ -1,3 +1,4 @@
+use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::BossBarConfig;
 use crate::configuration::commands::CommandsConfig;
 use crate::configuration::compression::CompressionConfig;
@@ -47,6 +48,8 @@ pub struct Config {
 
     pub server_list: ServerListConfig,
 
+    pub antispam: AntispamConfig,
+
     pub lobby: LobbyConfig,
 
     /// Message sent to the player after spawning in the world.
@@ -87,6 +90,7 @@ impl Default for Config {
         Self {
             bind: "0.0.0.0:25565".into(),
             server_list: ServerListConfig::default(),
+            antispam: AntispamConfig::default(),
             lobby: LobbyConfig::default(),
             welcome_message: "Welcome to PicoLimbo!".into(),
             action_bar: "Welcome to PicoLimbo!".into(),
@@ -137,4 +141,41 @@ fn create_default_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError>
     let toml_str = toml::to_string_pretty(&cfg)?;
     fs::write(path, toml_str)?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::configuration::antispam::{DEFAULT_CHAT_ANTISPAM_MESSAGE, DEFAULT_CHAT_COOLDOWN_MS};
+
+    #[test]
+    fn default_config_includes_antispam_defaults() {
+        let config = Config::default();
+
+        assert!(config.antispam.enabled);
+        assert_eq!(config.antispam.chat_cooldown_ms, DEFAULT_CHAT_COOLDOWN_MS);
+        assert_eq!(config.antispam.message, DEFAULT_CHAT_ANTISPAM_MESSAGE);
+    }
+
+    #[test]
+    fn missing_antispam_section_uses_defaults() {
+        let config: Config = toml::from_str("").unwrap();
+
+        assert!(config.antispam.enabled);
+        assert_eq!(config.antispam.chat_cooldown_ms, DEFAULT_CHAT_COOLDOWN_MS);
+        assert_eq!(config.antispam.message, DEFAULT_CHAT_ANTISPAM_MESSAGE);
+    }
+
+    #[test]
+    fn unknown_antispam_field_is_rejected() {
+        let result = toml::from_str::<Config>(
+            "
+            [antispam]
+            enabled = true
+            unknown = true
+            ",
+        );
+
+        assert!(result.is_err());
+    }
 }

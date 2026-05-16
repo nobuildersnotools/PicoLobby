@@ -118,6 +118,7 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .lock_time(cfg.world.experimental.lock_time)
         .description_text(&cfg.server_list.message_of_the_day)
         .welcome_message(&cfg.welcome_message)
+        .antispam(cfg.antispam)
         .action_bar(&cfg.action_bar)?
         .max_players(cfg.server_list.max_players)
         .set_lobby_enabled(cfg.lobby.enabled)

@@ -1,7 +1,9 @@
 use crate::handlers::play::set_player_position_and_rotation::teleport_player_to_spawn;
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
-use crate::server::lobby_chat::{MAX_CHAT_MESSAGE_CHARS, chat_feedback_packet};
+use crate::server::lobby_chat::{
+    MAX_CHAT_MESSAGE_CHARS, chat_feedback_packet, plain_chat_feedback_packet,
+};
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{ServerCommand, ServerCommands, ServerState};
@@ -11,11 +13,8 @@ use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPl
 use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
 use minecraft_packets::play::transfer_packet::TransferPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, VarInt};
-use std::time::Duration;
 use thiserror::Error;
 use tracing::{info, warn};
-
-const CHAT_RATE_LIMIT_INTERVAL: Duration = Duration::from_millis(750);
 
 impl PacketHandler for ChatCommandPacket {
     fn handle(
@@ -57,9 +56,11 @@ fn handle_chat_message(
         return;
     }
 
-    if !client_state.check_chat_rate_limit(CHAT_RATE_LIMIT_INTERVAL) {
+    let antispam = server_state.chat_antispam();
+    if antispam.enabled && !client_state.check_chat_rate_limit(antispam.chat_cooldown) {
         let version = client_state.protocol_version();
-        batch.queue(move || chat_feedback_packet(version, "You are sending messages too quickly."));
+        let message = antispam.message.clone();
+        batch.queue(move || chat_feedback_packet(version, &message));
         return;
     }
 
@@ -148,7 +149,7 @@ fn run_command(
                     Err(err) => {
                         warn!("{}: {}", client_state.get_username(), err);
                         let msg = format!("Unknown server: {destination_id}");
-                        batch.queue(move || chat_feedback_packet(version, &msg));
+                        batch.queue(move || plain_chat_feedback_packet(version, &msg));
                     }
                 }
             }
@@ -225,8 +226,12 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration::antispam::AntispamConfig;
+    use crate::configuration::commands::CommandsConfig;
     use crate::server::game_profile::GameProfile;
+    use futures::StreamExt;
     use minecraft_protocol::prelude::Uuid;
+    use std::time::Duration;
 
     fn client() -> ClientState {
         let mut c = ClientState::default();
@@ -236,10 +241,16 @@ mod tests {
     }
 
     fn server() -> ServerState {
+        server_with_antispam(AntispamConfig::default())
+    }
+
+    fn server_with_antispam(antispam: AntispamConfig) -> ServerState {
         let mut builder = ServerState::builder();
         builder
             .set_lobby_enabled(true)
-            .show_online_player_count(true);
+            .antispam(antispam)
+            .show_online_player_count(true)
+            .server_commands(CommandsConfig::default());
         builder.build().unwrap()
     }
 
@@ -270,6 +281,73 @@ mod tests {
     }
 
     #[test]
+    fn first_message_creates_lobby_chat_plan() {
+        let mut client = client();
+        let server = server();
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "hello", &mut Batch::new());
+
+        let plan = client.take_pending_chat_plan().expect("chat plan");
+        assert_eq!(plan.message, "hello");
+    }
+
+    #[test]
+    fn message_after_configured_cooldown_broadcasts() {
+        let mut client = client();
+        let server = server_with_antispam(AntispamConfig {
+            chat_cooldown_ms: 1,
+            ..AntispamConfig::default()
+        });
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "first", &mut Batch::new());
+        client.take_pending_chat_plan();
+        std::thread::sleep(Duration::from_millis(2));
+
+        handle_chat_message(&mut client, &server, "second", &mut Batch::new());
+
+        let plan = client.take_pending_chat_plan().expect("chat plan");
+        assert_eq!(plan.message, "second");
+    }
+
+    #[test]
+    fn disabled_antispam_allows_rapid_messages() {
+        let mut client = client();
+        let server = server_with_antispam(AntispamConfig {
+            enabled: false,
+            ..AntispamConfig::default()
+        });
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "first", &mut Batch::new());
+        client.take_pending_chat_plan();
+        handle_chat_message(&mut client, &server, "second", &mut Batch::new());
+
+        let plan = client.take_pending_chat_plan().expect("chat plan");
+        assert_eq!(plan.message, "second");
+    }
+
+    #[tokio::test]
+    async fn rate_limited_message_sends_feedback_packet() {
+        let mut client = client();
+        let server = server_with_antispam(AntispamConfig {
+            message: "Slow down.".to_string(),
+            ..AntispamConfig::default()
+        });
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "first", &mut Batch::new());
+        client.take_pending_chat_plan();
+
+        let mut batch = Batch::new();
+        handle_chat_message(&mut client, &server, "second", &mut batch);
+
+        let packets = batch.into_stream().collect::<Vec<_>>().await;
+        assert_eq!(packets.len(), 1);
+    }
+
+    #[test]
     fn command_does_not_broadcast_as_chat() {
         let mut client = client();
         let server = server();
@@ -278,5 +356,18 @@ mod tests {
         run_command(&mut client, &server, "spawn", &mut Batch::new());
 
         assert!(client.take_pending_chat_plan().is_none());
+    }
+
+    #[test]
+    fn chat_antispam_does_not_block_commands() {
+        let mut client = client();
+        let server = server();
+        server.register_lobby_session(&mut client);
+
+        handle_chat_message(&mut client, &server, "first", &mut Batch::new());
+        client.take_pending_chat_plan();
+        run_command(&mut client, &server, "fly", &mut Batch::new());
+
+        assert!(client.is_flight_allowed());
     }
 }
