@@ -493,6 +493,38 @@ fn send_commands_packet(
             1,
         ));
     }
+    if let ServerCommand::Enabled { alias } = server_state.server_commands().msg() {
+        commands.push(Command::with_required_arguments(
+            alias,
+            vec![
+                CommandArgument::string("player", StringBehavior::SingleWord),
+                CommandArgument::string("message", StringBehavior::GreedyPhrase),
+            ],
+            2,
+        ));
+    }
+    if let ServerCommand::Enabled { alias } = server_state.server_commands().reply() {
+        commands.push(Command::with_required_arguments(
+            alias,
+            vec![CommandArgument::string(
+                "message",
+                StringBehavior::GreedyPhrase,
+            )],
+            1,
+        ));
+    }
+    for reply_alias in server_state.server_commands().reply_aliases() {
+        if let ServerCommand::Enabled { alias } = reply_alias {
+            commands.push(Command::with_required_arguments(
+                alias,
+                vec![CommandArgument::string(
+                    "message",
+                    StringBehavior::GreedyPhrase,
+                )],
+                1,
+            ));
+        }
+    }
     let packet = CommandsPacket::new(commands);
     batch.queue(|| PacketRegistry::Commands(packet));
 }

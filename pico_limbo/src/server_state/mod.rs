@@ -1,7 +1,7 @@
 use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
-use crate::configuration::lobby::{LobbyNpcConfig, SelectorItemConfig};
+use crate::configuration::lobby::{LobbyNpcConfig, PrivateMessagesConfig, SelectorItemConfig};
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
@@ -9,8 +9,9 @@ use base64::{Engine, alphabet, engine};
 pub use lobby::{
     ChatVisibility, EntityId, LobbyChatPlan, LobbyJoinPlan, LobbyLeavePlan,
     LobbyLifecycleMessagePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction,
-    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyNpcValidationError, LobbyPosition, LobbyRecipient,
-    LobbySession, LobbySessionId, LobbyState, LobbySwingPlan,
+    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyNpcValidationError, LobbyPosition,
+    LobbyPrivateMessageError, LobbyPrivateMessagePlan, LobbyRecipient, LobbySession,
+    LobbySessionId, LobbyState, LobbySwingPlan,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
@@ -117,6 +118,45 @@ impl From<AntispamConfig> for ChatAntispamSettings {
     }
 }
 
+#[derive(Clone)]
+pub struct PrivateMessageSettings {
+    pub sender_format: String,
+    pub recipient_format: String,
+    pub unknown_target: String,
+    pub ambiguous_target: String,
+    pub hidden_target: String,
+    pub missing_reply_target: String,
+    pub self_message: String,
+    pub empty_message: String,
+    pub too_long: String,
+    pub rate_limit: String,
+    pub unavailable: String,
+}
+
+impl Default for PrivateMessageSettings {
+    fn default() -> Self {
+        PrivateMessagesConfig::default().into()
+    }
+}
+
+impl From<PrivateMessagesConfig> for PrivateMessageSettings {
+    fn from(config: PrivateMessagesConfig) -> Self {
+        Self {
+            sender_format: config.sender_format,
+            recipient_format: config.recipient_format,
+            unknown_target: config.unknown_target,
+            ambiguous_target: config.ambiguous_target,
+            hidden_target: config.hidden_target,
+            missing_reply_target: config.missing_reply_target,
+            self_message: config.self_message,
+            empty_message: config.empty_message,
+            too_long: config.too_long,
+            rate_limit: config.rate_limit,
+            unavailable: config.unavailable,
+        }
+    }
+}
+
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct ServerState {
@@ -131,6 +171,7 @@ pub struct ServerState {
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_private_messages: PrivateMessageSettings,
     lobby_join_message: Option<String>,
     lobby_leave_message: Option<String>,
     lobby_destinations: Vec<LobbyDestination>,
@@ -317,6 +358,10 @@ impl ServerState {
         &self.chat_antispam
     }
 
+    pub const fn private_message_settings(&self) -> &PrivateMessageSettings {
+        &self.lobby_private_messages
+    }
+
     pub const fn lobby_enabled(&self) -> bool {
         self.lobby_enabled
     }
@@ -491,6 +536,78 @@ impl ServerState {
         Some(plan)
     }
 
+    pub fn plan_lobby_private_message(
+        &self,
+        client_state: &ClientState,
+        target: &str,
+        message: impl Into<String>,
+    ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
+        if !self.lobby_enabled {
+            return Err(LobbyPrivateMessageError::Unavailable);
+        }
+
+        let settings = &self.lobby_private_messages;
+        self.lobby_state().plan_private_message(
+            client_state
+                .lobby_session_id()
+                .ok_or(LobbyPrivateMessageError::Unavailable)?,
+            target,
+            message,
+            settings.sender_format.clone(),
+            settings.recipient_format.clone(),
+        )
+    }
+
+    pub fn validate_lobby_private_message_target(
+        &self,
+        client_state: &ClientState,
+        target: &str,
+    ) -> Result<(), LobbyPrivateMessageError> {
+        if !self.lobby_enabled {
+            return Err(LobbyPrivateMessageError::Unavailable);
+        }
+        self.lobby_state().validate_private_message_target(
+            client_state
+                .lobby_session_id()
+                .ok_or(LobbyPrivateMessageError::Unavailable)?,
+            target,
+        )
+    }
+
+    pub fn plan_lobby_reply_message(
+        &self,
+        client_state: &ClientState,
+        message: impl Into<String>,
+    ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
+        if !self.lobby_enabled {
+            return Err(LobbyPrivateMessageError::Unavailable);
+        }
+
+        let settings = &self.lobby_private_messages;
+        self.lobby_state().plan_reply_message(
+            client_state
+                .lobby_session_id()
+                .ok_or(LobbyPrivateMessageError::Unavailable)?,
+            message,
+            settings.sender_format.clone(),
+            settings.recipient_format.clone(),
+        )
+    }
+
+    pub fn validate_lobby_reply_target(
+        &self,
+        client_state: &ClientState,
+    ) -> Result<(), LobbyPrivateMessageError> {
+        if !self.lobby_enabled {
+            return Err(LobbyPrivateMessageError::Unavailable);
+        }
+        self.lobby_state().validate_reply_target(
+            client_state
+                .lobby_session_id()
+                .ok_or(LobbyPrivateMessageError::Unavailable)?,
+        )
+    }
+
     pub fn plan_lobby_join_message(
         &self,
         session_id: LobbySessionId,
@@ -592,6 +709,7 @@ pub struct ServerStateBuilder {
     chat_antispam: ChatAntispamSettings,
     lobby_enabled: bool,
     lobby_chat_format: String,
+    lobby_private_messages: PrivateMessageSettings,
     lobby_join_message: String,
     lobby_leave_message: String,
     lobby_destinations: Vec<LobbyDestination>,
@@ -737,6 +855,11 @@ impl ServerStateBuilder {
 
     pub fn set_lobby_chat_format<S: Into<String>>(&mut self, format: S) -> &mut Self {
         self.lobby_chat_format = format.into();
+        self
+    }
+
+    pub fn set_lobby_private_messages(&mut self, config: PrivateMessagesConfig) -> &mut Self {
+        self.lobby_private_messages = config.into();
         self
     }
 
@@ -1016,6 +1139,7 @@ impl ServerStateBuilder {
             connected_clients: Arc::new(AtomicU32::new(0)),
             lobby_enabled: self.lobby_enabled,
             lobby_chat_format: self.lobby_chat_format,
+            lobby_private_messages: self.lobby_private_messages,
             lobby_join_message: optional_lifecycle_template(&self.lobby_join_message)?,
             lobby_leave_message: optional_lifecycle_template(&self.lobby_leave_message)?,
             lobby_destinations: self.lobby_destinations,

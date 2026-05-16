@@ -7,6 +7,9 @@ pub struct ServerCommands {
     fly_speed: String,
     transfer: String,
     server: String,
+    msg: String,
+    reply: String,
+    reply_aliases: Vec<String>,
 }
 
 impl From<CommandsConfig> for ServerCommands {
@@ -17,6 +20,9 @@ impl From<CommandsConfig> for ServerCommands {
             fly_speed: config.fly_speed,
             transfer: config.transfer,
             server: config.server,
+            msg: config.msg,
+            reply: config.reply,
+            reply_aliases: config.reply_aliases,
         }
     }
 }
@@ -45,6 +51,21 @@ impl ServerCommands {
 
     pub fn server(&self) -> ServerCommand {
         Self::server_command(self.server.clone())
+    }
+
+    pub fn msg(&self) -> ServerCommand {
+        Self::server_command(self.msg.clone())
+    }
+
+    pub fn reply(&self) -> ServerCommand {
+        Self::server_command(self.reply.clone())
+    }
+
+    pub fn reply_aliases(&self) -> Vec<ServerCommand> {
+        self.reply_aliases
+            .iter()
+            .map(|alias| Self::server_command(alias.clone()))
+            .collect()
     }
 
     fn server_command(alias: String) -> ServerCommand {

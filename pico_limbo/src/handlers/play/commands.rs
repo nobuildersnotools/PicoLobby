@@ -6,7 +6,7 @@ use crate::server::lobby_chat::{
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
-use crate::server_state::{ServerCommand, ServerCommands, ServerState};
+use crate::server_state::{LobbyPrivateMessageError, ServerCommand, ServerCommands, ServerState};
 use minecraft_packets::play::chat_command_packet::ChatCommandPacket;
 use minecraft_packets::play::chat_message_packet::ChatMessagePacket;
 use minecraft_packets::play::client_bound_player_abilities_packet::ClientBoundPlayerAbilitiesPacket;
@@ -153,8 +153,128 @@ fn run_command(
                     }
                 }
             }
+            Command::Msg { target, message } => {
+                handle_private_message_command(
+                    client_state,
+                    server_state,
+                    &target,
+                    &message,
+                    batch,
+                );
+            }
+            Command::Reply { message } => {
+                handle_reply_command(client_state, server_state, &message, batch);
+            }
         }
     }
+}
+
+fn handle_private_message_command(
+    client_state: &mut ClientState,
+    server_state: &ServerState,
+    target: &str,
+    message: &str,
+    batch: &mut Batch<PacketRegistry>,
+) {
+    let settings = server_state.private_message_settings();
+    let version = client_state.protocol_version();
+    let message = message.trim();
+    if message.is_empty() {
+        let feedback = settings.empty_message.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+    if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        let feedback = settings.too_long.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+
+    if let Err(err) = server_state.validate_lobby_private_message_target(client_state, target) {
+        queue_private_message_error(batch, version, settings, err, target);
+        return;
+    }
+
+    let antispam = server_state.chat_antispam();
+    if antispam.enabled && !client_state.check_chat_rate_limit(antispam.chat_cooldown) {
+        let feedback = settings.rate_limit.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+
+    let plan =
+        match server_state.plan_lobby_private_message(client_state, target, message.to_owned()) {
+            Ok(plan) => plan,
+            Err(err) => {
+                queue_private_message_error(batch, version, settings, err, target);
+                return;
+            }
+        };
+
+    client_state.set_pending_private_message_plan(plan);
+}
+
+fn handle_reply_command(
+    client_state: &mut ClientState,
+    server_state: &ServerState,
+    message: &str,
+    batch: &mut Batch<PacketRegistry>,
+) {
+    let settings = server_state.private_message_settings();
+    let version = client_state.protocol_version();
+    let message = message.trim();
+    if message.is_empty() {
+        let feedback = settings.empty_message.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+    if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        let feedback = settings.too_long.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+
+    if let Err(err) = server_state.validate_lobby_reply_target(client_state) {
+        queue_private_message_error(batch, version, settings, err, "");
+        return;
+    }
+
+    let antispam = server_state.chat_antispam();
+    if antispam.enabled && !client_state.check_chat_rate_limit(antispam.chat_cooldown) {
+        let feedback = settings.rate_limit.clone();
+        batch.queue(move || chat_feedback_packet(version, &feedback));
+        return;
+    }
+
+    let plan = match server_state.plan_lobby_reply_message(client_state, message.to_owned()) {
+        Ok(plan) => plan,
+        Err(err) => {
+            queue_private_message_error(batch, version, settings, err, "");
+            return;
+        }
+    };
+
+    client_state.set_pending_private_message_plan(plan);
+}
+
+fn queue_private_message_error(
+    batch: &mut Batch<PacketRegistry>,
+    version: ProtocolVersion,
+    settings: &crate::server_state::PrivateMessageSettings,
+    err: LobbyPrivateMessageError,
+    target: &str,
+) {
+    let template = match err {
+        LobbyPrivateMessageError::Unavailable => &settings.unavailable,
+        LobbyPrivateMessageError::UnknownTarget => &settings.unknown_target,
+        LobbyPrivateMessageError::AmbiguousTarget => &settings.ambiguous_target,
+        LobbyPrivateMessageError::HiddenTarget => &settings.hidden_target,
+        LobbyPrivateMessageError::MissingReplyTarget => &settings.missing_reply_target,
+        LobbyPrivateMessageError::SelfMessage => &settings.self_message,
+    };
+    #[allow(clippy::literal_string_with_formatting_args)]
+    let feedback = template.replace("{target}", &escape_minimessage_text(target));
+    batch.queue(move || chat_feedback_packet(version, &feedback));
 }
 
 #[derive(Debug, Error)]
@@ -171,29 +291,35 @@ pub enum ParseCommandError {
     InvalidPort(#[from] std::num::ParseIntError),
     #[error("missing destination id")]
     MissingDestinationId,
+    #[error("missing private-message target")]
+    MissingPrivateMessageTarget,
 }
 
+#[derive(Debug, PartialEq)]
 enum Command {
     Spawn,
     Fly,
     FlySpeed(f32),
     Transfer(String, i32),
     Server(String),
+    Msg { target: String, message: String },
+    Reply { message: String },
 }
 
 impl Command {
     pub fn parse(server_commands: &ServerCommands, input: &str) -> Result<Self, ParseCommandError> {
-        let mut parts = input.split_whitespace();
-        let cmd = parts.next().ok_or(ParseCommandError::Empty)?;
+        let (cmd, rest) = split_first_word(input).ok_or(ParseCommandError::Empty)?;
         if Self::is_command(server_commands.spawn(), cmd) {
             Ok(Self::Spawn)
         } else if Self::is_command(server_commands.fly(), cmd) {
             Ok(Self::Fly)
         } else if Self::is_command(server_commands.fly_speed(), cmd) {
+            let mut parts = rest.split_whitespace();
             let speed_str = parts.next().unwrap_or("0.05");
             let speed = speed_str.parse::<f32>()?.clamp(0.0, 1.0);
             Ok(Self::FlySpeed(speed))
         } else if Self::is_command(server_commands.transfer(), cmd) {
+            let mut parts = rest.split_whitespace();
             let host = parts
                 .next()
                 .ok_or(ParseCommandError::InvalidHost)?
@@ -202,11 +328,25 @@ impl Command {
             let port = port_str.parse::<i32>()?;
             Ok(Self::Transfer(host, port))
         } else if Self::is_command(server_commands.server(), cmd) {
-            let id = parts
+            let id = rest
+                .split_whitespace()
                 .next()
                 .ok_or(ParseCommandError::MissingDestinationId)?
                 .to_string();
             Ok(Self::Server(id))
+        } else if Self::is_command(server_commands.msg(), cmd) {
+            let (target, message) =
+                split_first_word(rest).ok_or(ParseCommandError::MissingPrivateMessageTarget)?;
+            Ok(Self::Msg {
+                target: target.to_string(),
+                message: message.trim().to_string(),
+            })
+        } else if Self::is_command(server_commands.reply(), cmd)
+            || Self::is_any_command(server_commands.reply_aliases(), cmd)
+        {
+            Ok(Self::Reply {
+                message: rest.trim().to_string(),
+            })
         } else {
             Err(ParseCommandError::Unknown)
         }
@@ -221,6 +361,30 @@ impl Command {
             false
         }
     }
+
+    fn is_any_command(server_commands: Vec<ServerCommand>, command: &str) -> bool {
+        server_commands
+            .into_iter()
+            .any(|server_command| Self::is_command(server_command, command))
+    }
+}
+
+fn split_first_word(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let word_end = input.find(char::is_whitespace).unwrap_or(input.len());
+    let word = &input[..word_end];
+    let rest = input[word_end..].trim();
+    Some((word, rest))
+}
+
+fn escape_minimessage_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -234,9 +398,13 @@ mod tests {
     use std::time::Duration;
 
     fn client() -> ClientState {
+        client_named("TestPlayer", Uuid::from_u128(1))
+    }
+
+    fn client_named(username: &str, uuid: Uuid) -> ClientState {
         let mut c = ClientState::default();
         c.set_protocol_version(ProtocolVersion::V1_20_5);
-        c.set_game_profile(GameProfile::new("TestPlayer", Uuid::from_u128(1), None));
+        c.set_game_profile(GameProfile::new(username, uuid, None));
         c
     }
 
@@ -369,5 +537,136 @@ mod tests {
         run_command(&mut client, &server, "fly", &mut Batch::new());
 
         assert!(client.is_flight_allowed());
+    }
+
+    #[test]
+    fn parses_msg_with_greedy_message() {
+        let commands = ServerCommands::from(CommandsConfig::default());
+
+        let parsed = Command::parse(&commands, "msg Steve hello there").unwrap();
+
+        assert_eq!(
+            parsed,
+            Command::Msg {
+                target: "Steve".to_string(),
+                message: "hello there".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_msg_with_extra_spaces_trimmed() {
+        let commands = ServerCommands::from(CommandsConfig::default());
+
+        let parsed = Command::parse(&commands, "  msg   Steve    hello there  ").unwrap();
+
+        assert_eq!(
+            parsed,
+            Command::Msg {
+                target: "Steve".to_string(),
+                message: "hello there".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_reply_aliases() {
+        let commands = ServerCommands::from(CommandsConfig::default());
+
+        assert_eq!(
+            Command::parse(&commands, "reply hello").unwrap(),
+            Command::Reply {
+                message: "hello".to_string()
+            }
+        );
+        assert_eq!(
+            Command::parse(&commands, "r hello").unwrap(),
+            Command::Reply {
+                message: "hello".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn disabled_msg_and_reply_do_not_parse() {
+        let commands = ServerCommands::from(CommandsConfig {
+            msg: String::new(),
+            reply: String::new(),
+            reply_aliases: Vec::new(),
+            ..CommandsConfig::default()
+        });
+
+        assert!(matches!(
+            Command::parse(&commands, "msg Steve hello"),
+            Err(ParseCommandError::Unknown)
+        ));
+        assert!(matches!(
+            Command::parse(&commands, "reply hello"),
+            Err(ParseCommandError::Unknown)
+        ));
+        assert!(matches!(
+            Command::parse(&commands, "r hello"),
+            Err(ParseCommandError::Unknown)
+        ));
+    }
+
+    #[test]
+    fn private_message_command_creates_private_plan_only() {
+        let mut sender = client_named("Sender", Uuid::from_u128(1));
+        let mut recipient = client_named("Steve", Uuid::from_u128(2));
+        let server = server_with_antispam(AntispamConfig {
+            enabled: false,
+            ..AntispamConfig::default()
+        });
+        server.register_lobby_session(&mut sender);
+        server.register_lobby_session(&mut recipient);
+
+        run_command(
+            &mut sender,
+            &server,
+            "msg Steve hello there",
+            &mut Batch::new(),
+        );
+
+        assert!(sender.take_pending_chat_plan().is_none());
+        let plan = sender
+            .take_pending_private_message_plan()
+            .expect("private message plan");
+        assert_eq!(plan.sender_username, "Sender");
+        assert_eq!(plan.recipient_username, "Steve");
+        assert_eq!(plan.message, "hello there");
+    }
+
+    #[test]
+    fn overlong_private_message_is_rejected() {
+        let mut sender = client_named("Sender", Uuid::from_u128(1));
+        let mut recipient = client_named("Steve", Uuid::from_u128(2));
+        let server = server();
+        server.register_lobby_session(&mut sender);
+        server.register_lobby_session(&mut recipient);
+
+        run_command(
+            &mut sender,
+            &server,
+            &format!("msg Steve {}", "a".repeat(MAX_CHAT_MESSAGE_CHARS + 1)),
+            &mut Batch::new(),
+        );
+
+        assert!(sender.take_pending_private_message_plan().is_none());
+    }
+
+    #[test]
+    fn private_messages_obey_chat_antispam() {
+        let mut sender = client_named("Sender", Uuid::from_u128(1));
+        let mut recipient = client_named("Steve", Uuid::from_u128(2));
+        let server = server();
+        server.register_lobby_session(&mut sender);
+        server.register_lobby_session(&mut recipient);
+
+        run_command(&mut sender, &server, "msg Steve first", &mut Batch::new());
+        sender.take_pending_private_message_plan();
+        run_command(&mut sender, &server, "msg Steve second", &mut Batch::new());
+
+        assert!(sender.take_pending_private_message_plan().is_none());
     }
 }

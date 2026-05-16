@@ -3,6 +3,27 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_CHAT_FORMAT: &str = "<white>&lt;{sender}&gt; {message}</white>";
 pub const DEFAULT_JOIN_MESSAGE: &str = "<yellow>{player} joined the game</yellow>";
 pub const DEFAULT_LEAVE_MESSAGE: &str = "<yellow>{player} left the game</yellow>";
+pub const DEFAULT_PRIVATE_MESSAGE_SENDER_FORMAT: &str =
+    "<gray>[me -> {recipient}]</gray> <white>{message}</white>";
+pub const DEFAULT_PRIVATE_MESSAGE_RECIPIENT_FORMAT: &str =
+    "<gray>[{sender} -> me]</gray> <white>{message}</white>";
+pub const DEFAULT_PRIVATE_MESSAGE_UNKNOWN_TARGET: &str =
+    "<red>Player '{target}' is not online in the lobby.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_AMBIGUOUS_TARGET: &str =
+    "<red>More than one online player matches '{target}'.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_HIDDEN_TARGET: &str =
+    "<red>{target} cannot receive private messages with hidden chat.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_MISSING_REPLY_TARGET: &str =
+    "<red>You have nobody to reply to.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_SELF_MESSAGE: &str =
+    "<red>You cannot send a private message to yourself.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_EMPTY_MESSAGE: &str =
+    "<red>Private message cannot be empty.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_TOO_LONG: &str = "<red>Private message is too long.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT: &str =
+    "<red>You are sending messages too quickly.</red>";
+pub const DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE: &str =
+    "<red>Private messages are only available in the lobby.</red>";
 
 /// A downstream server reachable via the Velocity proxy.
 /// `server` must match a key in Velocity's `[servers]` block.
@@ -54,6 +75,41 @@ pub struct LobbyNpcConfig {
     pub pitch: f32,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateMessagesConfig {
+    pub sender_format: String,
+    pub recipient_format: String,
+    pub unknown_target: String,
+    pub ambiguous_target: String,
+    pub hidden_target: String,
+    pub missing_reply_target: String,
+    pub self_message: String,
+    pub empty_message: String,
+    pub too_long: String,
+    pub rate_limit: String,
+    pub unavailable: String,
+}
+
+impl Default for PrivateMessagesConfig {
+    fn default() -> Self {
+        Self {
+            sender_format: DEFAULT_PRIVATE_MESSAGE_SENDER_FORMAT.to_string(),
+            recipient_format: DEFAULT_PRIVATE_MESSAGE_RECIPIENT_FORMAT.to_string(),
+            unknown_target: DEFAULT_PRIVATE_MESSAGE_UNKNOWN_TARGET.to_string(),
+            ambiguous_target: DEFAULT_PRIVATE_MESSAGE_AMBIGUOUS_TARGET.to_string(),
+            hidden_target: DEFAULT_PRIVATE_MESSAGE_HIDDEN_TARGET.to_string(),
+            missing_reply_target: DEFAULT_PRIVATE_MESSAGE_MISSING_REPLY_TARGET.to_string(),
+            self_message: DEFAULT_PRIVATE_MESSAGE_SELF_MESSAGE.to_string(),
+            empty_message: DEFAULT_PRIVATE_MESSAGE_EMPTY_MESSAGE.to_string(),
+            too_long: DEFAULT_PRIVATE_MESSAGE_TOO_LONG.to_string(),
+            rate_limit: DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT.to_string(),
+            unavailable: DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE.to_string(),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +129,7 @@ pub struct LobbyConfig {
     pub selector: Option<SelectorItemConfig>,
     /// Player-style NPCs that navigate to configured lobby servers.
     pub npcs: Vec<LobbyNpcConfig>,
+    pub private_messages: PrivateMessagesConfig,
 }
 
 impl Default for LobbyConfig {
@@ -98,6 +155,7 @@ impl Default for LobbyConfig {
                 yaw: 180.0,
                 pitch: 0.0,
             }],
+            private_messages: PrivateMessagesConfig::default(),
         }
     }
 }

@@ -123,6 +123,7 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .max_players(cfg.server_list.max_players)
         .set_lobby_enabled(cfg.lobby.enabled)
         .set_lobby_chat_format(cfg.lobby.chat_format)
+        .set_lobby_private_messages(cfg.lobby.private_messages)
         .set_lobby_join_message(cfg.lobby.join_message)
         .set_lobby_leave_message(cfg.lobby.leave_message)
         .set_lobby_destinations(lobby_destinations)?

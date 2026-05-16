@@ -1,7 +1,7 @@
 use crate::server::game_profile::GameProfile;
 use crate::server_state::{
-    ChatVisibility, LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbySessionId,
-    LobbySwingPlan, OpenSelectorState,
+    ChatVisibility, LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPrivateMessagePlan,
+    LobbySessionId, LobbySwingPlan, OpenSelectorState,
 };
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
@@ -28,6 +28,7 @@ impl Default for ClientState {
             lobby_session_id: None,
             chat_visibility: ChatVisibility::Unknown,
             pending_lobby_chat_plan: None,
+            pending_lobby_private_message_plan: None,
             last_chat_message_at: None,
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
@@ -55,6 +56,7 @@ pub struct ClientState {
     lobby_session_id: Option<LobbySessionId>,
     chat_visibility: ChatVisibility,
     pending_lobby_chat_plan: Option<LobbyChatPlan>,
+    pending_lobby_private_message_plan: Option<LobbyPrivateMessagePlan>,
     last_chat_message_at: Option<Instant>,
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
@@ -189,6 +191,14 @@ impl ClientState {
 
     pub const fn take_pending_chat_plan(&mut self) -> Option<LobbyChatPlan> {
         self.pending_lobby_chat_plan.take()
+    }
+
+    pub fn set_pending_private_message_plan(&mut self, plan: LobbyPrivateMessagePlan) {
+        self.pending_lobby_private_message_plan = Some(plan);
+    }
+
+    pub const fn take_pending_private_message_plan(&mut self) -> Option<LobbyPrivateMessagePlan> {
+        self.pending_lobby_private_message_plan.take()
     }
 
     pub fn check_chat_rate_limit(&mut self, min_interval: Duration) -> bool {

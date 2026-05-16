@@ -71,6 +71,19 @@ chat_format = "<white>&lt;{sender}&gt; {message}</white>"
 join_message = "<yellow>{player} joined the game</yellow>"
 leave_message = "<yellow>{player} left the game</yellow>"
 
+[lobby.private_messages]
+sender_format = "<gray>[me -> {recipient}]</gray> <white>{message}</white>"
+recipient_format = "<gray>[{sender} -> me]</gray> <white>{message}</white>"
+unknown_target = "<red>Player '{target}' is not online in the lobby.</red>"
+ambiguous_target = "<red>More than one online player matches '{target}'.</red>"
+hidden_target = "<red>{target} cannot receive private messages with hidden chat.</red>"
+missing_reply_target = "<red>You have nobody to reply to.</red>"
+self_message = "<red>You cannot send a private message to yourself.</red>"
+empty_message = "<red>Private message cannot be empty.</red>"
+too_long = "<red>Private message is too long.</red>"
+rate_limit = "<red>You are sending messages too quickly.</red>"
+unavailable = "<red>Private messages are only available in the lobby.</red>"
+
 [[lobby.servers]]
 id = "survival"
 display_name = "Survival"
@@ -133,5 +146,8 @@ fly = "fly"
 fly_speed = "flyspeed"
 transfer = "transfer"
 server = "server"
+msg = "msg"
+reply = "reply"
+reply_aliases = ["r"]
 ```
 :::

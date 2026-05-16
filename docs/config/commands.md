@@ -49,6 +49,60 @@ transfer = "transfer"
 ```
 :::
 
+## Server Command
+
+The `/server` command sends a player to a configured lobby destination through the proxy plugin message flow.
+
+:::code-group
+```toml [server.toml] {2}
+[commands]
+server = "server"
+```
+:::
+
+## Private Message Commands
+
+The `/msg <player> <message>` command sends a private message to one online player in the lobby. Player matching is a full username match and ignores case. `/reply <message>` replies to the last private-message peer in either direction, and `/r <message>` is the default reply alias.
+
+Private messages are lobby-only. Recipients with Full or Commands Only chat visibility can receive them; recipients with Hidden Chat cannot.
+
+:::code-group
+```toml [server.toml]
+[commands]
+msg = "msg"
+reply = "reply"
+reply_aliases = ["r"]
+```
+:::
+
+Use an empty alias list to disable `/r` and any other reply aliases.
+
+:::code-group
+```toml [server.toml]
+[commands]
+reply_aliases = []
+```
+:::
+
+Private-message output and feedback are configured under `[lobby.private_messages]`. The format fields support `{sender}`, `{recipient}`, `{target}`, and `{message}` placeholders where applicable. Player-provided text is escaped before MiniMessage parsing.
+
+:::code-group
+```toml [server.toml]
+[lobby.private_messages]
+sender_format = "<gray>[me -> {recipient}]</gray> <white>{message}</white>"
+recipient_format = "<gray>[{sender} -> me]</gray> <white>{message}</white>"
+unknown_target = "<red>Player '{target}' is not online in the lobby.</red>"
+ambiguous_target = "<red>More than one online player matches '{target}'.</red>"
+hidden_target = "<red>{target} cannot receive private messages with hidden chat.</red>"
+missing_reply_target = "<red>You have nobody to reply to.</red>"
+self_message = "<red>You cannot send a private message to yourself.</red>"
+empty_message = "<red>Private message cannot be empty.</red>"
+too_long = "<red>Private message is too long.</red>"
+rate_limit = "<red>You are sending messages too quickly.</red>"
+unavailable = "<red>Private messages are only available in the lobby.</red>"
+```
+:::
+
 ## Disabling Commands
 
 Any command can be disabled by setting its value to an empty string `""`. This prevents players from using that command entirely.
@@ -60,6 +114,9 @@ spawn = ""
 fly = "fly"
 fly_speed = ""
 transfer = ""
+server = ""
+msg = ""
+reply = ""
 ```
 :::
 
@@ -74,5 +131,8 @@ spawn = "home"
 fly = "soar"
 fly_speed = "speed"
 transfer = "server"
+server = "join"
+msg = "tell"
+reply = "respond"
 ```
 :::

@@ -83,6 +83,10 @@ impl ChatVisibility {
     pub const fn receives_normal_chat(self) -> bool {
         !matches!(self, Self::Hidden)
     }
+
+    pub const fn receives_private_messages(self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
 }
 
 #[derive(Clone)]
@@ -242,6 +246,19 @@ pub struct LobbyChatPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LobbyPrivateMessagePlan {
+    pub sender_session_id: LobbySessionId,
+    pub recipient_session_id: LobbySessionId,
+    pub sender_username: String,
+    pub recipient_username: String,
+    pub message: String,
+    pub sender_format: String,
+    pub recipient_format: String,
+    pub sender_recipient: LobbyRecipient,
+    pub message_recipient: LobbyRecipient,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LobbyLifecycleMessagePlan {
     pub player_username: String,
     pub template: String,
@@ -256,6 +273,7 @@ pub struct LobbyState {
     sessions_by_uuid: HashMap<Uuid, LobbySession>,
     entity_to_uuid: HashMap<EntityId, Uuid>,
     session_to_uuid: HashMap<LobbySessionId, Uuid>,
+    reply_peers: HashMap<LobbySessionId, Uuid>,
     broadcast_senders: HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>>,
 }
 
@@ -273,6 +291,7 @@ impl LobbyState {
             sessions_by_uuid: HashMap::new(),
             entity_to_uuid: HashMap::new(),
             session_to_uuid: HashMap::new(),
+            reply_peers: HashMap::new(),
             broadcast_senders: HashMap::new(),
         };
 
@@ -347,6 +366,7 @@ impl LobbyState {
         if let Some(previous) = self.sessions_by_uuid.remove(&session.uuid) {
             self.entity_to_uuid.remove(&previous.entity_id);
             self.session_to_uuid.remove(&previous.session_id);
+            self.reply_peers.remove(&previous.session_id);
         }
 
         session.session_id = self.allocate_session_id();
@@ -363,6 +383,7 @@ impl LobbyState {
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.entity_to_uuid.remove(&session.entity_id);
         self.session_to_uuid.remove(&session.session_id);
+        self.reply_peers.remove(&session.session_id);
         self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
@@ -371,6 +392,7 @@ impl LobbyState {
         let uuid = self.session_to_uuid.remove(&session_id)?;
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.entity_to_uuid.remove(&session.entity_id);
+        self.reply_peers.remove(&session_id);
         self.broadcast_senders.remove(&session_id);
         Some(session)
     }
@@ -396,6 +418,7 @@ impl LobbyState {
         let uuid = self.entity_to_uuid.remove(&entity_id)?;
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.session_to_uuid.remove(&session.session_id);
+        self.reply_peers.remove(&session.session_id);
         self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
@@ -513,6 +536,85 @@ impl LobbyState {
         })
     }
 
+    pub fn plan_private_message(
+        &mut self,
+        sender_session_id: LobbySessionId,
+        target: &str,
+        message: impl Into<String>,
+        sender_format: impl Into<String>,
+        recipient_format: impl Into<String>,
+    ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
+        let sender = self
+            .session_by_session_id(sender_session_id)
+            .ok_or(LobbyPrivateMessageError::Unavailable)?
+            .clone();
+        let recipient = self.find_session_by_username_ignore_case(target)?;
+        self.plan_private_message_to_session(
+            &sender,
+            &recipient,
+            message,
+            sender_format,
+            recipient_format,
+        )
+    }
+
+    pub fn validate_private_message_target(
+        &self,
+        sender_session_id: LobbySessionId,
+        target: &str,
+    ) -> Result<(), LobbyPrivateMessageError> {
+        let sender = self
+            .session_by_session_id(sender_session_id)
+            .ok_or(LobbyPrivateMessageError::Unavailable)?;
+        let recipient = self.find_session_by_username_ignore_case(target)?;
+        validate_private_message_pair(sender, &recipient)
+    }
+
+    pub fn validate_reply_target(
+        &self,
+        sender_session_id: LobbySessionId,
+    ) -> Result<(), LobbyPrivateMessageError> {
+        let sender = self
+            .session_by_session_id(sender_session_id)
+            .ok_or(LobbyPrivateMessageError::Unavailable)?;
+        let peer_uuid = *self
+            .reply_peers
+            .get(&sender_session_id)
+            .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
+        let recipient = self
+            .session_by_uuid(peer_uuid)
+            .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
+        validate_private_message_pair(sender, recipient)
+    }
+
+    pub fn plan_reply_message(
+        &mut self,
+        sender_session_id: LobbySessionId,
+        message: impl Into<String>,
+        sender_format: impl Into<String>,
+        recipient_format: impl Into<String>,
+    ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
+        let sender = self
+            .session_by_session_id(sender_session_id)
+            .ok_or(LobbyPrivateMessageError::Unavailable)?
+            .clone();
+        let peer_uuid = *self
+            .reply_peers
+            .get(&sender_session_id)
+            .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
+        let recipient = self
+            .session_by_uuid(peer_uuid)
+            .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?
+            .clone();
+        self.plan_private_message_to_session(
+            &sender,
+            &recipient,
+            message,
+            sender_format,
+            recipient_format,
+        )
+    }
+
     pub fn plan_lifecycle_message(
         &self,
         session_id: LobbySessionId,
@@ -572,6 +674,50 @@ impl LobbyState {
         recipients
     }
 
+    fn plan_private_message_to_session(
+        &mut self,
+        sender: &LobbySession,
+        recipient: &LobbySession,
+        message: impl Into<String>,
+        sender_format: impl Into<String>,
+        recipient_format: impl Into<String>,
+    ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
+        validate_private_message_pair(sender, recipient)?;
+
+        self.reply_peers.insert(sender.session_id, recipient.uuid);
+        self.reply_peers.insert(recipient.session_id, sender.uuid);
+
+        Ok(LobbyPrivateMessagePlan {
+            sender_session_id: sender.session_id,
+            recipient_session_id: recipient.session_id,
+            sender_username: sender.username.clone(),
+            recipient_username: recipient.username.clone(),
+            message: message.into(),
+            sender_format: sender_format.into(),
+            recipient_format: recipient_format.into(),
+            sender_recipient: recipient_for_session(sender),
+            message_recipient: recipient_for_session(recipient),
+        })
+    }
+
+    fn find_session_by_username_ignore_case(
+        &self,
+        target: &str,
+    ) -> Result<LobbySession, LobbyPrivateMessageError> {
+        let matches = self
+            .sessions_by_uuid
+            .values()
+            .filter(|session| session.username.eq_ignore_ascii_case(target))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        match matches.as_slice() {
+            [] => Err(LobbyPrivateMessageError::UnknownTarget),
+            [session] => Ok(session.clone()),
+            _ => Err(LobbyPrivateMessageError::AmbiguousTarget),
+        }
+    }
+
     pub fn plan_join_visibility(&self, new_session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
         let uuid = self.session_to_uuid.get(&new_session_id)?;
         let new_session = self.sessions_by_uuid.get(uuid)?.clone();
@@ -625,6 +771,44 @@ impl LobbyState {
             .max(EntityId::FIRST_PLAYER_ID);
         entity_id
     }
+}
+
+#[derive(Debug, Copy, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum LobbyPrivateMessageError {
+    #[error("private messages are only available in the lobby")]
+    Unavailable,
+    #[error("target player is not online")]
+    UnknownTarget,
+    #[error("target player is ambiguous")]
+    AmbiguousTarget,
+    #[error("target player has hidden chat")]
+    HiddenTarget,
+    #[error("no reply target")]
+    MissingReplyTarget,
+    #[error("cannot message self")]
+    SelfMessage,
+}
+
+const fn recipient_for_session(session: &LobbySession) -> LobbyRecipient {
+    LobbyRecipient {
+        session_id: session.session_id,
+        uuid: session.uuid,
+        entity_id: session.entity_id,
+        protocol_version: session.protocol_version,
+    }
+}
+
+fn validate_private_message_pair(
+    sender: &LobbySession,
+    recipient: &LobbySession,
+) -> Result<(), LobbyPrivateMessageError> {
+    if sender.session_id == recipient.session_id {
+        return Err(LobbyPrivateMessageError::SelfMessage);
+    }
+    if !recipient.chat_visibility.receives_private_messages() {
+        return Err(LobbyPrivateMessageError::HiddenTarget);
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -932,6 +1116,121 @@ mod tests {
                 .iter()
                 .any(|r| r.session_id == hidden.session_id)
         );
+    }
+
+    #[test]
+    #[allow(clippy::literal_string_with_formatting_args)]
+    fn private_message_exact_ignore_case_match_succeeds() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "Sender"));
+        state.insert(session(Uuid::from_u128(2), "Steve"));
+
+        let plan = state
+            .plan_private_message(
+                sender.session_id,
+                "steve",
+                "hello",
+                "to {recipient}: {message}",
+                "from {sender}: {message}",
+            )
+            .unwrap();
+
+        assert_eq!(plan.sender_username, "Sender");
+        assert_eq!(plan.recipient_username, "Steve");
+        assert_eq!(plan.message, "hello");
+    }
+
+    #[test]
+    fn private_message_unknown_self_hidden_and_ambiguous_targets_fail() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "Sender"));
+        let hidden = state.insert(session(Uuid::from_u128(2), "Hidden"));
+        state.update_chat_visibility(hidden.session_id, ChatVisibility::Hidden);
+        state.insert(session(Uuid::from_u128(3), "Dupe"));
+        state.insert(session(Uuid::from_u128(4), "dupe"));
+
+        assert_eq!(
+            state
+                .plan_private_message(sender.session_id, "Nobody", "hello", "", "")
+                .unwrap_err(),
+            LobbyPrivateMessageError::UnknownTarget
+        );
+        assert_eq!(
+            state
+                .plan_private_message(sender.session_id, "Sender", "hello", "", "")
+                .unwrap_err(),
+            LobbyPrivateMessageError::SelfMessage
+        );
+        assert_eq!(
+            state
+                .plan_private_message(sender.session_id, "Hidden", "hello", "", "")
+                .unwrap_err(),
+            LobbyPrivateMessageError::HiddenTarget
+        );
+        assert_eq!(
+            state
+                .plan_private_message(sender.session_id, "DUPE", "hello", "", "")
+                .unwrap_err(),
+            LobbyPrivateMessageError::AmbiguousTarget
+        );
+    }
+
+    #[test]
+    fn commands_only_target_receives_private_message() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "Sender"));
+        let target = state.insert(session(Uuid::from_u128(2), "Target"));
+        state.update_chat_visibility(target.session_id, ChatVisibility::CommandsOnly);
+
+        let plan = state
+            .plan_private_message(sender.session_id, "Target", "hello", "", "")
+            .unwrap();
+
+        assert_eq!(plan.recipient_session_id, target.session_id);
+    }
+
+    #[test]
+    fn successful_private_message_updates_reply_for_both_players() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "Sender"));
+        let target = state.insert(session(Uuid::from_u128(2), "Target"));
+
+        state
+            .plan_private_message(sender.session_id, "Target", "hello", "", "")
+            .unwrap();
+        let reply = state
+            .plan_reply_message(target.session_id, "back", "", "")
+            .unwrap();
+
+        assert_eq!(reply.sender_session_id, target.session_id);
+        assert_eq!(reply.recipient_session_id, sender.session_id);
+    }
+
+    #[test]
+    fn reply_to_offline_peer_fails_without_changing_reply_state() {
+        let mut state = LobbyState::new();
+        let sender = state.insert(session(Uuid::from_u128(1), "Sender"));
+        let target = state.insert(session(Uuid::from_u128(2), "Target"));
+        let other = state.insert(session(Uuid::from_u128(3), "Other"));
+
+        state
+            .plan_private_message(sender.session_id, "Target", "hello", "", "")
+            .unwrap();
+        state.remove_by_session_id(sender.session_id);
+        assert_eq!(
+            state
+                .plan_reply_message(target.session_id, "back", "", "")
+                .unwrap_err(),
+            LobbyPrivateMessageError::MissingReplyTarget
+        );
+
+        state
+            .plan_private_message(other.session_id, "Target", "hello", "", "")
+            .unwrap();
+        let reply = state
+            .plan_reply_message(target.session_id, "back", "", "")
+            .unwrap();
+        assert_eq!(reply.recipient_session_id, other.session_id);
     }
 
     #[test]
