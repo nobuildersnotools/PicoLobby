@@ -12,6 +12,15 @@ pub struct AntispamConfig {
     pub message: String,
 }
 
+impl AntispamConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for AntispamConfig {
     fn default() -> Self {
         Self {

@@ -1,4 +1,5 @@
 use crate::configuration::TaggedForwarding;
+use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::BossBarConfig;
 use crate::configuration::config::{Config, ConfigError, load_or_create};
 use crate::configuration::tab_list::TabListMode;
@@ -121,7 +122,11 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .lock_time(cfg.world.experimental.lock_time)
         .description_text(&cfg.server_list.message_of_the_day)
         .welcome_message(&cfg.welcome_message)
-        .antispam(cfg.antispam)
+        .antispam(if lobby_enabled {
+            cfg.lobby.antispam
+        } else {
+            AntispamConfig::disabled()
+        })
         .action_bar(&cfg.action_bar)?
         .max_players(cfg.server_list.max_players)
         .set_lobby_enabled(lobby_enabled)

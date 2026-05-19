@@ -1,3 +1,4 @@
+use crate::configuration::antispam::AntispamConfig;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CHAT_FORMAT: &str = "<white>&lt;{sender}&gt; {message}</white>";
@@ -157,6 +158,7 @@ pub struct LobbyConfig {
     /// Player-style NPCs that navigate to configured lobby servers.
     pub npcs: Vec<LobbyNpcConfig>,
     pub private_messages: PrivateMessagesConfig,
+    pub antispam: AntispamConfig,
 }
 
 impl Default for LobbyConfig {
@@ -193,6 +195,7 @@ impl Default for LobbyConfig {
                 pitch: 0.0,
             }],
             private_messages: PrivateMessagesConfig::default(),
+            antispam: AntispamConfig::default(),
         }
     }
 }
