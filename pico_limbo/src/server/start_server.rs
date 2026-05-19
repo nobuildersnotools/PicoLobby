@@ -55,6 +55,7 @@ fn load_configuration(config_path: &PathBuf) -> Option<Config> {
 
 fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
     let mut server_state_builder = ServerState::builder();
+    let lobby_enabled = cfg.lobby.enabled;
 
     let forwarding: TaggedForwarding = cfg.forwarding.into();
 
@@ -100,6 +101,8 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         )?;
     }
 
+    server_state_builder.scoreboard(cfg.scoreboard, lobby_enabled)?;
+
     let server_icon = cfg.server_list.server_icon;
     if std::fs::exists(&server_icon)? {
         server_state_builder.fav_icon(server_icon)?;
@@ -121,18 +124,18 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         .antispam(cfg.antispam)
         .action_bar(&cfg.action_bar)?
         .max_players(cfg.server_list.max_players)
-        .set_lobby_enabled(cfg.lobby.enabled)
+        .set_lobby_enabled(lobby_enabled)
         .set_lobby_chat_format(cfg.lobby.chat_format)
         .set_lobby_private_messages(cfg.lobby.private_messages)
         .set_lobby_join_message(cfg.lobby.join_message)
         .set_lobby_leave_message(cfg.lobby.leave_message)
         .set_lobby_destinations(lobby_destinations)?
-        .set_lobby_npcs(if cfg.lobby.enabled {
+        .set_lobby_npcs(if lobby_enabled {
             cfg.lobby.npcs
         } else {
             Vec::new()
         })?
-        .set_lobby_selector(if cfg.lobby.enabled {
+        .set_lobby_selector(if lobby_enabled {
             cfg.lobby.selector
         } else {
             None

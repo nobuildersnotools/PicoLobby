@@ -6,7 +6,9 @@ use crate::server::game_mode::GameMode;
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_brand::SERVER_BRAND;
-use crate::server_state::{ServerCommand, ServerState, TabList, Title, TitleType};
+use crate::server_state::{
+    Scoreboard, ScoreboardPlaceholders, ServerCommand, ServerState, TabList, Title, TitleType,
+};
 use minecraft_packets::configuration::acknowledge_finish_configuration_packet::AcknowledgeConfigurationPacket;
 use minecraft_packets::login::Property;
 use minecraft_packets::play::boss_bar_packet::BossBarPacket;
@@ -20,6 +22,9 @@ use minecraft_packets::play::legacy_chat_message_packet::LegacyChatMessagePacket
 use minecraft_packets::play::legacy_set_title_packet::LegacySetTitlePacket;
 use minecraft_packets::play::login_packet::LoginPacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
+use minecraft_packets::play::scoreboard_packets::{
+    SetDisplayObjectivePacket, SetObjectivePacket, SetPlayerTeamPacket, SetScorePacket,
+};
 use minecraft_packets::play::server_data_packet::ServerDataPacket;
 use minecraft_packets::play::set_action_bar_text_packet::SetActionBarTextPacket;
 use minecraft_packets::play::set_chunk_cache_center_packet::SetCenterChunkPacket;
@@ -268,6 +273,8 @@ pub fn send_play_packets(
     let packet = UpdateTimePacket::new(ticks, !lock_time);
     batch.queue(|| PacketRegistry::UpdateTime(packet));
 
+    send_scoreboard_packets(batch, client_state, server_state)?;
+
     if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
         send_action_bar_packet(batch, server_state, protocol_version);
         send_skin_packets(batch, client_state, server_state);
@@ -300,6 +307,170 @@ pub fn send_play_packets(
     client_state.set_keep_alive_should_enable();
 
     Ok(())
+}
+
+fn send_scoreboard_packets(
+    batch: &mut Batch<PacketRegistry>,
+    client_state: &ClientState,
+    server_state: &ServerState,
+) -> Result<(), PacketHandlerError> {
+    for packet in build_scoreboard_packets(client_state, server_state)? {
+        batch.queue(move || packet);
+    }
+    Ok(())
+}
+
+pub fn build_scoreboard_packets(
+    client_state: &ClientState,
+    server_state: &ServerState,
+) -> Result<Vec<PacketRegistry>, PacketHandlerError> {
+    let Some(scoreboard) = server_state.scoreboard() else {
+        return Ok(Vec::new());
+    };
+    let username = client_state.get_username();
+    let placeholders = ScoreboardPlaceholders {
+        player: &username,
+        online: server_state.online_players(),
+        max_players: server_state.max_players(),
+        server: "lobby",
+    };
+    let rendered = scoreboard
+        .render(&placeholders)
+        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+    let objective_name = Scoreboard::objective_name();
+    let mut packets = Vec::with_capacity(2 + rendered.lines.len() * 2);
+
+    packets.push(PacketRegistry::SetObjective(SetObjectivePacket::create(
+        objective_name,
+        rendered.title,
+    )));
+    packets.push(PacketRegistry::SetDisplayObjective(
+        SetDisplayObjectivePacket::sidebar(objective_name),
+    ));
+
+    let line_count = i32::try_from(rendered.lines.len()).unwrap_or(0);
+    for (index, line) in rendered.lines.into_iter().enumerate() {
+        let entry = scoreboard_entry(index);
+        let team_name = format!("plsb{index:02}");
+        let score = line_count - i32::try_from(index).unwrap_or(0);
+        let (prefix, suffix) = scoreboard_line_parts(line, client_state.protocol_version());
+        packets.push(PacketRegistry::SetPlayerTeam(SetPlayerTeamPacket::create(
+            team_name,
+            Component::new(""),
+            prefix,
+            suffix,
+            vec![entry.clone()],
+        )));
+        packets.push(PacketRegistry::SetScore(SetScorePacket::change(
+            entry,
+            objective_name,
+            score,
+        )));
+    }
+
+    Ok(packets)
+}
+
+fn scoreboard_line_parts(
+    line: Component,
+    protocol_version: ProtocolVersion,
+) -> (Component, Component) {
+    if protocol_version.is_after_inclusive(ProtocolVersion::V1_13) {
+        return (line, Component::new(""));
+    }
+
+    let legacy = line.to_legacy_text();
+    let (prefix, remainder) = split_legacy_team_part(&legacy, 16);
+    if remainder.is_empty() {
+        return (Component::new(prefix), Component::new(""));
+    }
+
+    let formatting = active_legacy_formatting(&prefix);
+    let suffix_source = format!("{formatting}{remainder}");
+    let (suffix, _) = split_legacy_team_part(&suffix_source, 16);
+    (Component::new(prefix), Component::new(suffix))
+}
+
+fn split_legacy_team_part(value: &str, max_chars: usize) -> (String, String) {
+    let chars = value.chars().collect::<Vec<_>>();
+    if chars.len() <= max_chars {
+        return (value.to_string(), String::new());
+    }
+
+    let mut split = max_chars;
+    if chars.get(split - 1) == Some(&'\u{00a7}') {
+        split -= 1;
+    }
+
+    (
+        chars[..split].iter().collect(),
+        chars[split..].iter().collect(),
+    )
+}
+
+fn active_legacy_formatting(value: &str) -> String {
+    let mut color = None;
+    let mut formats = Vec::new();
+    let mut chars = value.chars();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\u{00a7}' {
+            continue;
+        }
+        let Some(code) = chars.next().map(|code| code.to_ascii_lowercase()) else {
+            break;
+        };
+        match code {
+            '0'..='9' | 'a'..='f' => {
+                color = Some(code);
+                formats.clear();
+            }
+            'k'..='o' if !formats.contains(&code) => {
+                formats.push(code);
+            }
+            'r' => {
+                color = None;
+                formats.clear();
+            }
+            _ => {}
+        }
+    }
+
+    let mut formatting = String::new();
+    if let Some(color) = color {
+        formatting.push('\u{00a7}');
+        formatting.push(color);
+    }
+    for code in formats {
+        formatting.push('\u{00a7}');
+        formatting.push(code);
+    }
+    if formatting.is_empty() {
+        formatting.push('\u{00a7}');
+        formatting.push('r');
+    }
+    formatting
+}
+
+fn scoreboard_entry(index: usize) -> String {
+    const CODES: [&str; 15] = [
+        "\u{00a7}0",
+        "\u{00a7}1",
+        "\u{00a7}2",
+        "\u{00a7}3",
+        "\u{00a7}4",
+        "\u{00a7}5",
+        "\u{00a7}6",
+        "\u{00a7}7",
+        "\u{00a7}8",
+        "\u{00a7}9",
+        "\u{00a7}a",
+        "\u{00a7}b",
+        "\u{00a7}c",
+        "\u{00a7}d",
+        "\u{00a7}e",
+    ];
+    CODES.get(index).unwrap_or(&"\u{00a7}f").to_string()
 }
 
 fn send_selector_item_packet(
@@ -552,9 +723,11 @@ pub fn send_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration::scoreboard::{ScoreboardConfig, ScoreboardEnabledMode};
     use crate::server::game_profile::GameProfile;
     use futures::StreamExt;
     use minecraft_protocol::prelude::Uuid;
+    use pico_text_component::prelude::parse_mini_message;
 
     fn server_state() -> ServerState {
         let mut builder = ServerState::builder();
@@ -569,6 +742,29 @@ mod tests {
             .welcome_message("Hello, World!")
             .set_lobby_enabled(true)
             .show_online_player_count(true);
+        builder.build().unwrap()
+    }
+
+    fn scoreboard_server_state(lobby_enabled: bool, mode: ScoreboardEnabledMode) -> ServerState {
+        let mut builder = ServerState::builder();
+        builder
+            .view_distance(0)
+            .welcome_message("")
+            .set_lobby_enabled(lobby_enabled)
+            .show_online_player_count(true)
+            .scoreboard(
+                ScoreboardConfig {
+                    enabled: mode,
+                    title: "<bold>PicoLobby</bold>".to_string(),
+                    update_interval_ms: 1000,
+                    lines: vec![
+                        "<gray>{player}".to_string(),
+                        "<green>{online}<dark_gray>/<green>{max_players}".to_string(),
+                    ],
+                },
+                lobby_enabled,
+            )
+            .unwrap();
         builder.build().unwrap()
     }
 
@@ -588,6 +784,126 @@ mod tests {
         let mut cs = client(protocol);
         cs.set_game_profile(GameProfile::new(username, uuid, None));
         cs
+    }
+
+    async fn collect_play_packets(
+        client_state: &mut ClientState,
+        server_state: &ServerState,
+    ) -> Vec<PacketRegistry> {
+        let mut batch = Batch::new();
+        send_play_packets(&mut batch, client_state, server_state).unwrap();
+        batch.into_stream().collect().await
+    }
+
+    #[tokio::test]
+    async fn lobby_gated_scoreboard_sends_when_lobby_is_enabled() {
+        let server_state = scoreboard_server_state(true, ScoreboardEnabledMode::Lobby);
+        let mut client_state = lobby_client(ProtocolVersion::V1_20_5, "Steve", Uuid::from_u128(7));
+
+        let packets = collect_play_packets(&mut client_state, &server_state).await;
+
+        assert!(
+            packets
+                .iter()
+                .any(|p| matches!(p, PacketRegistry::SetObjective(_)))
+        );
+        assert!(
+            packets
+                .iter()
+                .any(|p| matches!(p, PacketRegistry::SetDisplayObjective(_)))
+        );
+        assert_eq!(
+            packets
+                .iter()
+                .filter(|p| matches!(p, PacketRegistry::SetPlayerTeam(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            packets
+                .iter()
+                .filter(|p| matches!(p, PacketRegistry::SetScore(_)))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn lobby_gated_scoreboard_omits_when_lobby_is_disabled() {
+        let server_state = scoreboard_server_state(false, ScoreboardEnabledMode::Lobby);
+        let mut client_state = lobby_client(ProtocolVersion::V1_20_5, "Steve", Uuid::from_u128(7));
+
+        let packets = collect_play_packets(&mut client_state, &server_state).await;
+
+        assert!(
+            !packets
+                .iter()
+                .any(|p| matches!(p, PacketRegistry::SetObjective(_)))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicitly_enabled_scoreboard_sends_without_lobby() {
+        let server_state = scoreboard_server_state(false, ScoreboardEnabledMode::Always);
+        let mut client_state = lobby_client(ProtocolVersion::V1_20_5, "Steve", Uuid::from_u128(7));
+
+        let packets = collect_play_packets(&mut client_state, &server_state).await;
+
+        assert!(
+            packets
+                .iter()
+                .any(|p| matches!(p, PacketRegistry::SetObjective(_)))
+        );
+    }
+
+    #[tokio::test]
+    async fn explicitly_disabled_scoreboard_never_sends() {
+        let server_state = scoreboard_server_state(true, ScoreboardEnabledMode::Never);
+        let mut client_state = lobby_client(ProtocolVersion::V1_20_5, "Steve", Uuid::from_u128(7));
+
+        let packets = collect_play_packets(&mut client_state, &server_state).await;
+
+        assert!(
+            !packets
+                .iter()
+                .any(|p| matches!(p, PacketRegistry::SetObjective(_)))
+        );
+    }
+
+    #[test]
+    fn legacy_scoreboard_line_parts_preserve_placeholder_text() {
+        let line = parse_mini_message("<gray>Player: <white>Steve").unwrap();
+
+        let (prefix, suffix) = scoreboard_line_parts(line, ProtocolVersion::V1_12_2);
+        let prefix = prefix.to_legacy_text();
+        let suffix = suffix.to_legacy_text();
+
+        assert!(prefix.chars().count() <= 16);
+        assert!(suffix.chars().count() <= 16);
+        assert_eq!(strip_legacy_codes(&(prefix + &suffix)), "Player: Steve");
+    }
+
+    #[test]
+    fn modern_scoreboard_line_parts_keep_component_in_prefix() {
+        let line = parse_mini_message("<gray>Player: <white>Steve").unwrap();
+
+        let (prefix, suffix) = scoreboard_line_parts(line.clone(), ProtocolVersion::V1_13);
+
+        assert_eq!(prefix, line);
+        assert_eq!(suffix, Component::new(""));
+    }
+
+    fn strip_legacy_codes(value: &str) -> String {
+        let mut stripped = String::new();
+        let mut chars = value.chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{00a7}' {
+                chars.next();
+            } else {
+                stripped.push(ch);
+            }
+        }
+        stripped
     }
 
     #[tokio::test]

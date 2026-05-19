@@ -30,6 +30,7 @@ pub mod player_input_packet;
 pub mod player_position_packet;
 pub mod remove_entities_packet;
 pub mod rotate_head_packet;
+pub mod scoreboard_packets;
 pub mod server_bound_player_abilities_packet;
 pub mod server_bound_set_held_item_packet;
 pub mod server_data_packet;

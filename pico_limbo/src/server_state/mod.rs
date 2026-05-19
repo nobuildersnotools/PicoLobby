@@ -2,6 +2,7 @@ use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
 use crate::configuration::lobby::{LobbyNpcConfig, PrivateMessagesConfig, SelectorItemConfig};
+use crate::configuration::scoreboard::ScoreboardConfig;
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
@@ -93,6 +94,87 @@ pub struct Title {
     pub fade_in: i32,
     pub stay: i32,
     pub fade_out: i32,
+}
+
+#[derive(Clone)]
+pub struct Scoreboard {
+    pub title_template: String,
+    pub line_templates: Vec<String>,
+    pub update_interval: Duration,
+}
+
+#[derive(Clone)]
+pub struct RenderedScoreboard {
+    pub title: Component,
+    pub lines: Vec<Component>,
+}
+
+pub struct ScoreboardPlaceholders<'a> {
+    pub player: &'a str,
+    pub online: u32,
+    pub max_players: u32,
+    pub server: &'a str,
+}
+
+impl Scoreboard {
+    const MAX_LINES: usize = 15;
+    const OBJECTIVE_NAME: &'static str = "picolobby";
+
+    pub const fn objective_name() -> &'static str {
+        Self::OBJECTIVE_NAME
+    }
+
+    pub const fn update_interval(&self) -> Duration {
+        self.update_interval
+    }
+
+    pub fn new(config: ScoreboardConfig) -> Result<Self, ServerStateBuilderError> {
+        validate_scoreboard_identifier(Self::OBJECTIVE_NAME)?;
+        if config.lines.len() > Self::MAX_LINES {
+            return Err(ServerStateBuilderError::TooManyScoreboardLines {
+                count: config.lines.len(),
+                max: Self::MAX_LINES,
+            });
+        }
+
+        parse_scoreboard_template(&config.title)?;
+        for line in &config.lines {
+            parse_scoreboard_template(line)?;
+        }
+
+        Ok(Self {
+            title_template: config.title,
+            line_templates: config.lines,
+            update_interval: Duration::from_millis(config.update_interval_ms.max(50)),
+        })
+    }
+
+    pub fn render(
+        &self,
+        placeholders: &ScoreboardPlaceholders<'_>,
+    ) -> Result<RenderedScoreboard, MiniMessageError> {
+        let (title, line_strings) = self.render_strings(placeholders);
+        let title = parse_mini_message(&title)?;
+        let lines = line_strings
+            .iter()
+            .map(|line| parse_mini_message(line))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(RenderedScoreboard { title, lines })
+    }
+
+    pub fn render_strings(
+        &self,
+        placeholders: &ScoreboardPlaceholders<'_>,
+    ) -> (String, Vec<String>) {
+        (
+            render_scoreboard_template(&self.title_template, placeholders),
+            self.line_templates
+                .iter()
+                .map(|line| render_scoreboard_template(line, placeholders))
+                .collect(),
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -191,6 +273,7 @@ pub struct ServerState {
     fav_icon: Option<String>,
     compression_settings: Option<CompressionSettings>,
     title: Option<Title>,
+    scoreboard: Option<Scoreboard>,
     action_bar: Option<Component>,
     reduced_debug_info: bool,
     is_player_listed: bool,
@@ -324,6 +407,10 @@ impl ServerState {
 
     pub const fn title(&self) -> Option<&Title> {
         self.title.as_ref()
+    }
+
+    pub const fn scoreboard(&self) -> Option<&Scoreboard> {
+        self.scoreboard.as_ref()
     }
 
     pub const fn action_bar(&self) -> Option<&Component> {
@@ -729,6 +816,7 @@ pub struct ServerStateBuilder {
     fav_icon: Option<String>,
     compression_settings: Option<CompressionSettings>,
     title: Option<Title>,
+    scoreboard: Option<Scoreboard>,
     action_bar: Option<Component>,
     reduced_debug_info: bool,
     is_player_listed: bool,
@@ -766,6 +854,10 @@ pub enum ServerStateBuilderError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     TryFromInt(#[from] TryFromIntError),
+    #[error("scoreboard has {count} lines but the sidebar supports at most {max}")]
+    TooManyScoreboardLines { count: usize, max: usize },
+    #[error("scoreboard objective name '{0}' is longer than 16 characters")]
+    InvalidScoreboardObjectiveName(String),
 }
 
 impl ServerStateBuilder {
@@ -1094,6 +1186,17 @@ impl ServerStateBuilder {
         Ok(self)
     }
 
+    pub fn scoreboard(
+        &mut self,
+        config: ScoreboardConfig,
+        lobby_enabled: bool,
+    ) -> Result<&mut Self, ServerStateBuilderError> {
+        if config.enabled.should_send(lobby_enabled) {
+            self.scoreboard = Some(Scoreboard::new(config)?);
+        }
+        Ok(self)
+    }
+
     pub fn server_commands(&mut self, commands_config: CommandsConfig) -> &mut Self {
         self.server_commands = commands_config.into();
         self
@@ -1159,6 +1262,7 @@ impl ServerStateBuilder {
             fav_icon: self.fav_icon,
             compression_settings: self.compression_settings,
             title: self.title,
+            scoreboard: self.scoreboard,
             reduced_debug_info: self.reduced_debug_info,
             is_player_listed: self.is_player_listed,
             reply_to_status: self.reply_to_status,
@@ -1186,6 +1290,39 @@ fn optional_lifecycle_template(content: &str) -> Result<Option<String>, MiniMess
 
     parse_mini_message(&content.replace("{player}", "Player"))?;
     Ok(Some(content.to_string()))
+}
+
+fn validate_scoreboard_identifier(value: &str) -> Result<(), ServerStateBuilderError> {
+    if value.chars().count() > 16 {
+        Err(ServerStateBuilderError::InvalidScoreboardObjectiveName(
+            value.to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_scoreboard_template(content: &str) -> Result<Component, MiniMessageError> {
+    parse_mini_message(&render_scoreboard_template(
+        content,
+        &ScoreboardPlaceholders {
+            player: "Player",
+            online: 1,
+            max_players: 20,
+            server: "lobby",
+        },
+    ))
+}
+
+pub fn render_scoreboard_template(
+    content: &str,
+    placeholders: &ScoreboardPlaceholders<'_>,
+) -> String {
+    content
+        .replace("{player}", placeholders.player)
+        .replace("{online}", &placeholders.online.to_string())
+        .replace("{max_players}", &placeholders.max_players.to_string())
+        .replace("{server}", placeholders.server)
 }
 
 fn format_duration(duration: Duration) -> String {
@@ -1336,6 +1473,47 @@ mod tests {
                 .is_some()
         );
         assert_eq!(server_state.online_players(), 0);
+    }
+
+    #[test]
+    fn scoreboard_placeholders_render_known_values_and_keep_unknown_literals() {
+        let rendered = render_scoreboard_template(
+            "{player} {online}/{max_players} {server} {unknown}",
+            &ScoreboardPlaceholders {
+                player: "Steve",
+                online: 3,
+                max_players: 20,
+                server: "lobby",
+            },
+        );
+
+        assert_eq!(rendered, "Steve 3/20 lobby {unknown}");
+    }
+
+    #[test]
+    fn scoreboard_rejects_more_than_fifteen_lines() {
+        let result = Scoreboard::new(ScoreboardConfig {
+            lines: vec!["line".to_string(); 16],
+            ..ScoreboardConfig::default()
+        });
+
+        assert!(matches!(
+            result,
+            Err(ServerStateBuilderError::TooManyScoreboardLines { count: 16, max: 15 })
+        ));
+    }
+
+    #[test]
+    fn scoreboard_rejects_invalid_mini_message_templates() {
+        let result = Scoreboard::new(ScoreboardConfig {
+            title: "<unknown>PicoLobby</unknown>".to_string(),
+            ..ScoreboardConfig::default()
+        });
+
+        assert!(matches!(
+            result,
+            Err(ServerStateBuilderError::MiniMessage(_))
+        ));
     }
 
     fn server_with_destinations(destinations: Vec<LobbyDestination>) -> ServerState {

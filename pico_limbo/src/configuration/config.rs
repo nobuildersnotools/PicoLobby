@@ -6,6 +6,7 @@ use crate::configuration::env_placeholders::{EnvPlaceholderError, expand_env_pla
 use crate::configuration::forwarding::ForwardingConfig;
 use crate::configuration::game_mode_config::GameModeConfig;
 use crate::configuration::lobby::LobbyConfig;
+use crate::configuration::scoreboard::ScoreboardConfig;
 use crate::configuration::server_list::ServerListConfig;
 use crate::configuration::tab_list::TabListConfig;
 use crate::configuration::title::TitleConfig;
@@ -82,6 +83,8 @@ pub struct Config {
 
     pub title: TitleConfig,
 
+    pub scoreboard: ScoreboardConfig,
+
     pub commands: CommandsConfig,
 }
 
@@ -104,6 +107,7 @@ impl Default for Config {
             boss_bar: BossBarConfig::default(),
             compression: CompressionConfig::default(),
             title: TitleConfig::default(),
+            scoreboard: ScoreboardConfig::default(),
             allow_unsupported_versions: false,
             allow_flight: false,
             accept_transfers: false,
@@ -172,6 +176,38 @@ mod tests {
             "
             [antispam]
             enabled = true
+            unknown = true
+            ",
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_config_includes_lobby_gated_scoreboard() {
+        let toml = toml::to_string_pretty(&Config::default()).unwrap();
+
+        assert!(toml.contains("[scoreboard]"));
+        assert!(toml.contains("enabled = \"lobby\""));
+    }
+
+    #[test]
+    fn missing_scoreboard_section_uses_default() {
+        let config: Config = toml::from_str("").unwrap();
+
+        assert_eq!(
+            config.scoreboard.enabled,
+            crate::configuration::scoreboard::ScoreboardEnabledMode::Lobby
+        );
+        assert_eq!(config.scoreboard.lines.len(), 3);
+    }
+
+    #[test]
+    fn unknown_scoreboard_field_is_rejected() {
+        let result = toml::from_str::<Config>(
+            "
+            [scoreboard]
+            enabled = \"lobby\"
             unknown = true
             ",
         );

@@ -19,6 +19,8 @@ pub enum MiniMessageError {
     QuickXml(#[from] quick_xml::Error),
     #[error(transparent)]
     Encoding(#[from] quick_xml::encoding::EncodingError),
+    #[error("unknown MiniMessage tag '{0}'")]
+    UnknownTag(String),
 }
 
 fn is_styling_tag(tag: &str) -> bool {
@@ -106,7 +108,9 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
             Event::Start(e) => {
                 let tag_name = String::from_utf8(e.name().as_ref().to_vec()).unwrap_or_default();
 
-                if tag_name == "newline" {
+                if tag_name == "root" {
+                    continue;
+                } else if tag_name == "newline" {
                     if let Some(current_style) = style_stack.last() {
                         push_text(&mut flat_components, "\n", current_style);
                     }
@@ -126,12 +130,18 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
                         _ => {}
                     }
                     style_stack.push(new_style);
+                } else {
+                    return Err(MiniMessageError::UnknownTag(tag_name));
                 }
             }
             Event::End(e) => {
                 let tag_name = String::from_utf8(e.name().as_ref().to_vec()).unwrap_or_default();
-                if is_styling_tag(&tag_name) && style_stack.len() > 1 {
+                if tag_name == "root" {
+                    continue;
+                } else if is_styling_tag(&tag_name) && style_stack.len() > 1 {
                     style_stack.pop();
+                } else if !is_styling_tag(&tag_name) && tag_name != "newline" {
+                    return Err(MiniMessageError::UnknownTag(tag_name));
                 }
             }
             Event::Text(e) => {
@@ -152,6 +162,8 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
                     && let Some(current_style) = style_stack.last()
                 {
                     push_text(&mut flat_components, "\n", current_style);
+                } else if tag_name != "newline" {
+                    return Err(MiniMessageError::UnknownTag(tag_name));
                 }
             }
             Event::Eof => break,

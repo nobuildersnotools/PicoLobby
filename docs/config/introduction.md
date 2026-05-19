@@ -17,6 +17,7 @@ PicoLimbo uses a simple TOML configuration file to manage all server settings. T
 - [Compression](./compression) - Configure the compression
 - [Proxy Integration](./proxy-integration) - Configure proxy integration
 - [Schematic Loading](./schematic-loading) - Experimental features for world customization
+- [Scoreboard](./scoreboard) - Configure the lobby sidebar scoreboard
 - [Server List](./server-list) - Customize your server's appearance in the Minecraft client
 - [Server Settings](./server-settings) - Core server configuration
 - [Tab List](./tab-list) - Configure the tab list

@@ -1,3 +1,4 @@
+use crate::handlers::configuration::build_scoreboard_packets;
 use crate::server::client_data::ClientData;
 use crate::server::lobby_chat::{
     chat_packets_for_plan, lifecycle_message_packets_for_plan, private_message_packets_for_plan,
@@ -24,12 +25,14 @@ use minecraft_protocol::prelude::{ProtocolVersion, State};
 use net::packet_stream::PacketStreamError;
 use net::raw_packet::RawPacket;
 use std::collections::HashMap;
+use std::future::pending;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::time::{Duration, Interval};
 use tracing::{debug, error, info, trace, warn};
 
 pub struct Server {
@@ -495,6 +498,8 @@ async fn read(
     was_in_play_state: &mut bool,
     broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
     broadcast_rx: &mut mpsc::UnboundedReceiver<RawPacket>,
+    scoreboard_interval: &mut Option<Interval>,
+    last_scoreboard_render: &mut Option<(String, Vec<String>)>,
 ) -> Result<(), PacketProcessingError> {
     tokio::select! {
         result = client_data.read_packet() => {
@@ -504,9 +509,73 @@ async fn read(
         () = client_data.keep_alive_tick() => {
             send_keep_alive(client_data).await?;
         }
+        () = scoreboard_interval_tick(scoreboard_interval) => {
+            refresh_scoreboard(client_data, server_state, last_scoreboard_render).await?;
+        }
         Some(raw_packet) = broadcast_rx.recv() => {
             client_data.write_packet(raw_packet).await?;
         }
+    }
+    Ok(())
+}
+
+async fn configured_scoreboard_interval(
+    server_state: &Arc<RwLock<ServerState>>,
+) -> Option<Interval> {
+    let interval = {
+        let server_state_guard = server_state.read().await;
+        server_state_guard.scoreboard()?.update_interval()
+    };
+    let mut interval = tokio::time::interval(interval.max(Duration::from_millis(50)));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    Some(interval)
+}
+
+async fn scoreboard_interval_tick(interval: &mut Option<Interval>) {
+    if let Some(interval) = interval {
+        interval.tick().await;
+    } else {
+        pending::<()>().await;
+    }
+}
+
+async fn refresh_scoreboard(
+    client_data: &ClientData,
+    server_state: &Arc<RwLock<ServerState>>,
+    last_scoreboard_render: &mut Option<(String, Vec<String>)>,
+) -> Result<(), PacketProcessingError> {
+    let client_state = client_data.client().await;
+    if client_state.state() != State::Play {
+        return Ok(());
+    }
+    let protocol_version = client_state.protocol_version();
+    let server_state_guard = server_state.read().await;
+    let Some(scoreboard) = server_state_guard.scoreboard() else {
+        return Ok(());
+    };
+    let username = client_state.get_username();
+    let placeholders = crate::server_state::ScoreboardPlaceholders {
+        player: &username,
+        online: server_state_guard.online_players(),
+        max_players: server_state_guard.max_players(),
+        server: "lobby",
+    };
+    let rendered = scoreboard.render_strings(&placeholders);
+    if last_scoreboard_render.is_none() {
+        *last_scoreboard_render = Some(rendered);
+        return Ok(());
+    }
+    if last_scoreboard_render.as_ref() == Some(&rendered) {
+        return Ok(());
+    }
+    let packets = build_scoreboard_packets(&client_state, &server_state_guard)?;
+    *last_scoreboard_render = Some(rendered);
+    drop(server_state_guard);
+    drop(client_state);
+
+    for packet in packets {
+        let raw_packet = packet.encode_packet(protocol_version)?;
+        client_data.write_packet(raw_packet).await?;
     }
     Ok(())
 }
@@ -515,6 +584,8 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
     let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel::<RawPacket>();
     let client_data = ClientData::new(socket);
     let mut was_in_play_state = false;
+    let mut scoreboard_interval = configured_scoreboard_interval(&server_state).await;
+    let mut last_scoreboard_render = None;
 
     loop {
         match read(
@@ -523,6 +594,8 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
             &mut was_in_play_state,
             &broadcast_tx,
             &mut broadcast_rx,
+            &mut scoreboard_interval,
+            &mut last_scoreboard_render,
         )
         .await
         {

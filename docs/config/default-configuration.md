@@ -140,6 +140,12 @@ fade_in = 10
 stay = 70
 fade_out = 20
 
+[scoreboard]
+enabled = "lobby"
+title = "<bold>PicoLobby</bold>"
+update_interval_ms = 1000
+lines = ["<gray>Player: <white>{player}", "<gray>Online: <green>{online}<dark_gray>/<green>{max_players}", "<gray>Server: <aqua>{server}"]
+
 [commands]
 spawn = "spawn"
 fly = "fly"

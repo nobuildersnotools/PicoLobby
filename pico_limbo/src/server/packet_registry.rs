@@ -52,6 +52,9 @@ use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
 use minecraft_packets::play::player_input_packet::PlayerInputPacket;
 use minecraft_packets::play::remove_entities_packet::RemoveEntitiesPacket;
 use minecraft_packets::play::rotate_head_packet::RotateHeadPacket;
+use minecraft_packets::play::scoreboard_packets::{
+    SetDisplayObjectivePacket, SetObjectivePacket, SetPlayerTeamPacket, SetScorePacket,
+};
 use minecraft_packets::play::server_bound_player_abilities_packet::ServerBoundPlayerAbilitiesPacket;
 use minecraft_packets::play::server_bound_set_held_item_packet::ServerBoundSetHeldItemPacket;
 use minecraft_packets::play::server_data_packet::ServerDataPacket;
@@ -338,6 +341,30 @@ pub enum PacketRegistry {
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:set_time")]
     UpdateTime(UpdateTimePacket),
 
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:set_objective"
+    )]
+    SetObjective(SetObjectivePacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:set_display_objective"
+    )]
+    SetDisplayObjective(SetDisplayObjectivePacket),
+
+    #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:set_score")]
+    SetScore(SetScorePacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
+        name = "minecraft:set_player_team"
+    )]
+    SetPlayerTeam(SetPlayerTeamPacket),
+
     #[protocol_id(state = "play", bound = "clientbound", name = "minecraft:tab_list")]
     TabList(TabListPacket),
 
@@ -614,6 +641,7 @@ mod tests {
     use super::*;
     use minecraft_packets::play::VoidChunkContext;
     use minecraft_protocol::prelude::{BinaryReader, DecodePacket, Uuid, VarInt};
+    use pico_text_component::prelude::Component;
 
     #[test]
     fn decodes_current_player_command_packet() {
@@ -864,6 +892,59 @@ mod tests {
                 &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                 "{protocol_version:?}"
             );
+        }
+    }
+
+    #[test]
+    fn encodes_scoreboard_packet_ids_for_representative_versions() {
+        for (protocol_version, objective_id, display_id, team_id, score_id) in [
+            (ProtocolVersion::V1_7_2, 0x3b, 0x3d, 0x3e, 0x3c),
+            (ProtocolVersion::V1_8, 0x3b, 0x3d, 0x3e, 0x3c),
+            (ProtocolVersion::V1_11, 0x3f, 0x38, 0x41, 0x42),
+            (ProtocolVersion::V1_12, 0x41, 0x3a, 0x43, 0x44),
+            (ProtocolVersion::V1_12_2, 0x42, 0x3b, 0x44, 0x45),
+            (ProtocolVersion::V1_13, 0x45, 0x3e, 0x47, 0x48),
+            (ProtocolVersion::V1_17, 0x53, 0x4c, 0x55, 0x56),
+            (ProtocolVersion::V1_20_5, 0x5e, 0x57, 0x60, 0x61),
+            (ProtocolVersion::V26_1, 106, 98, 109, 110),
+        ] {
+            let objective = PacketRegistry::SetObjective(SetObjectivePacket::create(
+                "picolobby",
+                Component::new("PicoLobby"),
+            ))
+            .encode_packet(protocol_version)
+            .unwrap();
+            let display = PacketRegistry::SetDisplayObjective(SetDisplayObjectivePacket::sidebar(
+                "picolobby",
+            ))
+            .encode_packet(protocol_version)
+            .unwrap();
+            let team = PacketRegistry::SetPlayerTeam(SetPlayerTeamPacket::create(
+                "plsb00",
+                Component::new(""),
+                Component::new("Line"),
+                Component::new(""),
+                vec!["\u{00a7}0".to_string()],
+            ))
+            .encode_packet(protocol_version)
+            .unwrap();
+            let score =
+                PacketRegistry::SetScore(SetScorePacket::change("\u{00a7}0", "picolobby", 1))
+                    .encode_packet(protocol_version)
+                    .unwrap();
+
+            assert_eq!(
+                objective.packet_id(),
+                Some(objective_id),
+                "{protocol_version:?}"
+            );
+            assert_eq!(
+                display.packet_id(),
+                Some(display_id),
+                "{protocol_version:?}"
+            );
+            assert_eq!(team.packet_id(), Some(team_id), "{protocol_version:?}");
+            assert_eq!(score.packet_id(), Some(score_id), "{protocol_version:?}");
         }
     }
 

@@ -8,6 +8,7 @@ mod forwarding;
 mod game_mode_config;
 pub mod lobby;
 mod require_boolean;
+pub mod scoreboard;
 mod server_list;
 pub mod tab_list;
 pub mod title;
