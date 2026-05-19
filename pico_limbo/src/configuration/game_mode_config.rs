@@ -1,7 +1,7 @@
 use crate::server::game_mode::GameMode;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum GameModeConfig {
     Survival,

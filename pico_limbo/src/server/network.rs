@@ -1,4 +1,4 @@
-use crate::handlers::configuration::build_scoreboard_packets;
+use crate::handlers::configuration::build_scoreboard_update_packets_from_rendered;
 use crate::server::client_data::ClientData;
 use crate::server::lobby_chat::{
     chat_packets_for_plan, lifecycle_message_packets_for_plan, private_message_packets_for_plan,
@@ -15,7 +15,7 @@ use crate::server::packet_registry::{
 use crate::server::shutdown_signal::shutdown_signal;
 use crate::server_state::{
     LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPrivateMessagePlan, LobbySessionId,
-    LobbySwingPlan, ServerState,
+    LobbySwingPlan, RenderedScoreboard, ServerState,
 };
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
@@ -24,7 +24,6 @@ use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, State};
 use net::packet_stream::PacketStreamError;
 use net::raw_packet::RawPacket;
-use std::collections::HashMap;
 use std::future::pending;
 use std::num::TryFromIntError;
 use std::sync::Arc;
@@ -58,6 +57,7 @@ impl Server {
         };
 
         info!("Listening on: {}", self.listen_address);
+        tokio::spawn(scoreboard_broadcast_task(Arc::clone(&self.state)));
         self.accept(&listener).await;
     }
 
@@ -283,24 +283,36 @@ async fn send_join_visibility(
         return Ok(());
     };
     let npc_spawn_plan = server_state_guard.plan_lobby_npc_spawn();
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&join_plan.existing_recipients)
-        .into_iter()
-        .collect();
+    let senders =
+        server_state_guard.collect_lobby_broadcast_senders(&join_plan.existing_recipients);
     drop(server_state_guard);
 
     let newcomer_packets = join_visibility_packets_for_newcomer(&join_plan, newcomer_version);
     let newcomer_packet_count = newcomer_packets.len();
     for packet in newcomer_packets {
-        if let Ok(raw_packet) = packet.encode_packet(newcomer_version) {
-            client_data.write_packet(raw_packet).await?;
+        match packet.encode_packet(newcomer_version) {
+            Ok(raw_packet) => client_data.write_packet(raw_packet).await?,
+            Err(err) => {
+                warn!(
+                    "Failed to encode join visibility packet for newcomer version {}: {}",
+                    newcomer_version.humanize(),
+                    err
+                );
+            }
         }
     }
 
     if let Some(npc_spawn_plan) = npc_spawn_plan {
         for packet in npc_spawn_packets_for_join(&npc_spawn_plan, newcomer_version) {
-            if let Ok(raw_packet) = packet.encode_packet(newcomer_version) {
-                client_data.write_packet(raw_packet).await?;
+            match packet.encode_packet(newcomer_version) {
+                Ok(raw_packet) => client_data.write_packet(raw_packet).await?,
+                Err(err) => {
+                    warn!(
+                        "Failed to encode NPC spawn packet for newcomer version {}: {}",
+                        newcomer_version.humanize(),
+                        err
+                    );
+                }
             }
         }
     }
@@ -312,9 +324,19 @@ async fn send_join_visibility(
         let sid = batch.recipient.session_id;
         if let Some(sender) = senders.get(&sid) {
             for packet in batch.packets {
-                if let Ok(raw_packet) = packet.encode_packet(version) {
-                    let _ = sender.send(raw_packet);
-                    broadcast_count += 1;
+                match packet.encode_packet(version) {
+                    Ok(raw_packet) => {
+                        let _ = sender.send(raw_packet);
+                        broadcast_count += 1;
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to encode join visibility broadcast packet for session {:?} version {}: {}",
+                            sid,
+                            version.humanize(),
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -339,10 +361,7 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
     }
 
     let server_state_guard = server_state.read().await;
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&plan.recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
     for batch in batches {
@@ -350,8 +369,18 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
         let version = batch.recipient.protocol_version;
         if let Some(sender) = senders.get(&session_id) {
             for packet in batch.packets {
-                if let Ok(raw_packet) = packet.encode_packet(version) {
-                    let _ = sender.send(raw_packet);
+                match packet.encode_packet(version) {
+                    Ok(raw_packet) => {
+                        let _ = sender.send(raw_packet);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to encode movement broadcast packet for session {:?} version {}: {}",
+                            session_id,
+                            version.humanize(),
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -365,10 +394,7 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
     }
 
     let server_state_guard = server_state.read().await;
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&plan.recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
     for batch in batches {
@@ -376,8 +402,18 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
         let version = batch.recipient.protocol_version;
         if let Some(sender) = senders.get(&session_id) {
             for packet in batch.packets {
-                if let Ok(raw_packet) = packet.encode_packet(version) {
-                    let _ = sender.send(raw_packet);
+                match packet.encode_packet(version) {
+                    Ok(raw_packet) => {
+                        let _ = sender.send(raw_packet);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to encode metadata broadcast packet for session {:?} version {}: {}",
+                            session_id,
+                            version.humanize(),
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -391,10 +427,7 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
     }
 
     let server_state_guard = server_state.read().await;
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&plan.recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
     for batch in batches {
@@ -402,8 +435,18 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
         let version = batch.recipient.protocol_version;
         if let Some(sender) = senders.get(&session_id) {
             for packet in batch.packets {
-                if let Ok(raw_packet) = packet.encode_packet(version) {
-                    let _ = sender.send(raw_packet);
+                match packet.encode_packet(version) {
+                    Ok(raw_packet) => {
+                        let _ = sender.send(raw_packet);
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Failed to encode swing broadcast packet for session {:?} version {}: {}",
+                            session_id,
+                            version.humanize(),
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -421,17 +464,24 @@ async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerSt
         .map(|(recipient, _)| recipient.clone())
         .collect::<Vec<_>>();
     let server_state_guard = server_state.read().await;
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&recipients);
     drop(server_state_guard);
 
     for (recipient, packet) in packets {
-        if let Some(sender) = senders.get(&recipient.session_id)
-            && let Ok(raw_packet) = packet.encode_packet(recipient.protocol_version)
-        {
-            let _ = sender.send(raw_packet);
+        if let Some(sender) = senders.get(&recipient.session_id) {
+            match packet.encode_packet(recipient.protocol_version) {
+                Ok(raw_packet) => {
+                    let _ = sender.send(raw_packet);
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to encode chat packet for session {:?} version {}: {}",
+                        recipient.session_id,
+                        recipient.protocol_version.humanize(),
+                        err
+                    );
+                }
+            }
         }
     }
 }
@@ -450,17 +500,24 @@ async fn broadcast_private_message(
         .map(|(recipient, _)| recipient.clone())
         .collect::<Vec<_>>();
     let server_state_guard = server_state.read().await;
-    let senders: HashMap<_, _> = server_state_guard
-        .collect_lobby_broadcast_senders(&recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&recipients);
     drop(server_state_guard);
 
     for (recipient, packet) in packets {
-        if let Some(sender) = senders.get(&recipient.session_id)
-            && let Ok(raw_packet) = packet.encode_packet(recipient.protocol_version)
-        {
-            let _ = sender.send(raw_packet);
+        if let Some(sender) = senders.get(&recipient.session_id) {
+            match packet.encode_packet(recipient.protocol_version) {
+                Ok(raw_packet) => {
+                    let _ = sender.send(raw_packet);
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to encode private-message packet for session {:?} version {}: {}",
+                        recipient.session_id,
+                        recipient.protocol_version.humanize(),
+                        err
+                    );
+                }
+            }
         }
     }
 }
@@ -478,16 +535,23 @@ fn broadcast_lifecycle_message_with_guard(
         .iter()
         .map(|(recipient, _)| recipient.clone())
         .collect::<Vec<_>>();
-    let senders: HashMap<_, _> = server_state
-        .collect_lobby_broadcast_senders(&recipients)
-        .into_iter()
-        .collect();
+    let senders = server_state.collect_lobby_broadcast_senders(&recipients);
 
     for (recipient, packet) in packets {
-        if let Some(sender) = senders.get(&recipient.session_id)
-            && let Ok(raw_packet) = packet.encode_packet(recipient.protocol_version)
-        {
-            let _ = sender.send(raw_packet);
+        if let Some(sender) = senders.get(&recipient.session_id) {
+            match packet.encode_packet(recipient.protocol_version) {
+                Ok(raw_packet) => {
+                    let _ = sender.send(raw_packet);
+                }
+                Err(err) => {
+                    warn!(
+                        "Failed to encode lifecycle-message packet for session {:?} version {}: {}",
+                        recipient.session_id,
+                        recipient.protocol_version.humanize(),
+                        err
+                    );
+                }
+            }
         }
     }
 }
@@ -499,7 +563,7 @@ async fn read(
     broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
     broadcast_rx: &mut mpsc::UnboundedReceiver<RawPacket>,
     scoreboard_interval: &mut Option<Interval>,
-    last_scoreboard_render: &mut Option<(String, Vec<String>)>,
+    last_scoreboard_render: &mut Option<RenderedScoreboard>,
 ) -> Result<(), PacketProcessingError> {
     tokio::select! {
         result = client_data.read_packet() => {
@@ -522,13 +586,104 @@ async fn read(
 async fn configured_scoreboard_interval(
     server_state: &Arc<RwLock<ServerState>>,
 ) -> Option<Interval> {
-    let interval = {
+    let (interval, lobby_enabled) = {
         let server_state_guard = server_state.read().await;
-        server_state_guard.scoreboard()?.update_interval()
+        (
+            server_state_guard.scoreboard()?.update_interval(),
+            server_state_guard.lobby_enabled(),
+        )
     };
+    if lobby_enabled {
+        return None;
+    }
     let mut interval = tokio::time::interval(interval.max(Duration::from_millis(50)));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     Some(interval)
+}
+
+async fn scoreboard_broadcast_task(server_state: Arc<RwLock<ServerState>>) {
+    let (tick_duration, enabled) = {
+        let guard = server_state.read().await;
+        let Some(scoreboard) = guard.scoreboard() else {
+            return;
+        };
+        (scoreboard.update_interval(), guard.lobby_enabled())
+    };
+    if !enabled {
+        return;
+    }
+    let mut interval = tokio::time::interval(tick_duration.max(Duration::from_millis(50)));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut last_renders: std::collections::HashMap<LobbySessionId, RenderedScoreboard> =
+        std::collections::HashMap::new();
+
+    loop {
+        interval.tick().await;
+        let guard = server_state.read().await;
+        let Some(scoreboard) = guard.scoreboard() else {
+            continue;
+        };
+        let sessions = guard.lobby_scoreboard_sessions();
+        if sessions.is_empty() {
+            last_renders.clear();
+            continue;
+        }
+        let online = guard.online_players();
+        let max_players = guard.max_players();
+
+        let recipients: Vec<_> = sessions
+            .iter()
+            .map(crate::server_state::ScoreboardSessionSnapshot::to_recipient)
+            .collect();
+        let senders = guard.collect_lobby_broadcast_senders(&recipients);
+
+        let mut next_renders = std::collections::HashMap::with_capacity(sessions.len());
+
+        for snap in &sessions {
+            let placeholders = crate::server_state::ScoreboardPlaceholders {
+                player: &snap.username,
+                online,
+                max_players,
+                server: "lobby",
+            };
+            let rendered = match scoreboard.render(&placeholders) {
+                Ok(r) => r,
+                Err(err) => {
+                    warn!(
+                        "Failed to render scoreboard for session {:?}: {}",
+                        snap.session_id, err
+                    );
+                    continue;
+                }
+            };
+            let changed = last_renders.get(&snap.session_id) != Some(&rendered);
+            if changed && let Some(sender) = senders.get(&snap.session_id) {
+                let packets = build_scoreboard_update_packets_from_rendered(
+                    rendered.clone(),
+                    snap.protocol_version,
+                );
+                for packet in packets {
+                    match packet.encode_packet(snap.protocol_version) {
+                        Ok(raw) => {
+                            let _ = sender.send(raw);
+                        }
+                        Err(err) => {
+                            warn!(
+                                "Failed to encode scoreboard packet for session {:?} version {}: {}",
+                                snap.session_id,
+                                snap.protocol_version.humanize(),
+                                err
+                            );
+                        }
+                    }
+                }
+            }
+            next_renders.insert(snap.session_id, rendered);
+        }
+        drop(guard);
+        last_renders = next_renders;
+    }
 }
 
 async fn scoreboard_interval_tick(interval: &mut Option<Interval>) {
@@ -542,7 +697,7 @@ async fn scoreboard_interval_tick(interval: &mut Option<Interval>) {
 async fn refresh_scoreboard(
     client_data: &ClientData,
     server_state: &Arc<RwLock<ServerState>>,
-    last_scoreboard_render: &mut Option<(String, Vec<String>)>,
+    last_scoreboard_render: &mut Option<RenderedScoreboard>,
 ) -> Result<(), PacketProcessingError> {
     let client_state = client_data.client().await;
     if client_state.state() != State::Play {
@@ -560,7 +715,10 @@ async fn refresh_scoreboard(
         max_players: server_state_guard.max_players(),
         server: "lobby",
     };
-    let rendered = scoreboard.render_strings(&placeholders);
+    let rendered = scoreboard
+        .render(&placeholders)
+        .map_err(|err| PacketProcessingError::Custom(err.to_string()))?;
+    drop(server_state_guard);
     if last_scoreboard_render.is_none() {
         *last_scoreboard_render = Some(rendered);
         return Ok(());
@@ -568,9 +726,8 @@ async fn refresh_scoreboard(
     if last_scoreboard_render.as_ref() == Some(&rendered) {
         return Ok(());
     }
-    let packets = build_scoreboard_packets(&client_state, &server_state_guard)?;
+    let packets = build_scoreboard_update_packets_from_rendered(rendered.clone(), protocol_version);
     *last_scoreboard_render = Some(rendered);
-    drop(server_state_guard);
     drop(client_state);
 
     for packet in packets {
@@ -630,10 +787,8 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
                     server_state_guard.unregister_lobby_session_with_leave_plan(lobby_session_id)
                 {
                     let batches = leave_visibility_batches(&plan);
-                    let senders: HashMap<_, _> = server_state_guard
-                        .collect_lobby_broadcast_senders(&plan.recipients)
-                        .into_iter()
-                        .collect();
+                    let senders =
+                        server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
 
                     let batch_count = batches.len();
                     let mut sent = 0usize;
@@ -642,9 +797,19 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
                         let version = batch.recipient.protocol_version;
                         if let Some(sender) = senders.get(&session_id) {
                             for packet in batch.packets {
-                                if let Ok(raw_packet) = packet.encode_packet(version) {
-                                    let _ = sender.send(raw_packet);
-                                    sent += 1;
+                                match packet.encode_packet(version) {
+                                    Ok(raw_packet) => {
+                                        let _ = sender.send(raw_packet);
+                                        sent += 1;
+                                    }
+                                    Err(err) => {
+                                        warn!(
+                                            "Failed to encode leave visibility packet for session {:?} version {}: {}",
+                                            session_id,
+                                            version.humanize(),
+                                            err
+                                        );
+                                    }
                                 }
                             }
                         }

@@ -3,14 +3,14 @@ use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum BossBarConfig {
     Enabled(EnabledBossBarConfig),
     Disabled(DisabledBossBarConfig),
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnabledBossBarConfig {
     #[serde(deserialize_with = "require_true")]
@@ -21,13 +21,13 @@ pub struct EnabledBossBarConfig {
     pub division: BossBarDivisionConfig,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct DisabledBossBarConfig {
     #[serde(deserialize_with = "require_false")]
     enabled: bool,
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BossBarColorConfig {
     #[default]
@@ -40,7 +40,7 @@ pub enum BossBarColorConfig {
     White = 6,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub enum BossBarDivisionConfig {
     #[default]
     NoDivision,

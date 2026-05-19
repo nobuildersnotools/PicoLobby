@@ -11,7 +11,7 @@ use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_messa
 #[derive(Debug, Clone)]
 pub struct LobbySelector {
     pub hotbar_slot: u8,
-    item_identifier: String,
+    pub(crate) item_identifier: String,
     display_name: Option<Component>,
     lore: Vec<Component>,
     /// Legacy pre-1.13 numeric item ID, if the item existed under that scheme.
@@ -79,7 +79,7 @@ impl LobbySelector {
 #[derive(Debug, Clone)]
 pub struct LobbyVisibilityToggle {
     pub hotbar_slot: u8,
-    item_identifier: String,
+    pub(crate) item_identifier: String,
     display_name_on: Option<Component>,
     display_name_off: Option<Component>,
     lore_on: Vec<Component>,
@@ -98,8 +98,16 @@ impl LobbyVisibilityToggle {
         let item_identifier = config.item;
         let legacy_item_id = legacy_item_id_for(&item_identifier);
 
-        let display_name_on = config.display_name_on.as_deref().map(parse_mini_message).transpose()?;
-        let display_name_off = config.display_name_off.as_deref().map(parse_mini_message).transpose()?;
+        let display_name_on = config
+            .display_name_on
+            .as_deref()
+            .map(parse_mini_message)
+            .transpose()?;
+        let display_name_off = config
+            .display_name_off
+            .as_deref()
+            .map(parse_mini_message)
+            .transpose()?;
         let lore_on = config
             .lore_on
             .iter()
@@ -112,7 +120,7 @@ impl LobbyVisibilityToggle {
             .collect::<Result<_, _>>()?;
 
         Ok(Self {
-            hotbar_slot: config.slot.min(8),
+            hotbar_slot: config.slot,
             item_identifier,
             display_name_on,
             display_name_off,
@@ -462,8 +470,16 @@ mod tests {
     fn visibility_toggle_unknown_item_returns_none_packet() {
         let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:unknown_xyz"))
             .expect("valid toggle");
-        assert!(toggle.build_hotbar_packet(true, ProtocolVersion::V1_21).is_none());
-        assert!(toggle.build_hotbar_packet(false, ProtocolVersion::V1_21).is_none());
+        assert!(
+            toggle
+                .build_hotbar_packet(true, ProtocolVersion::V1_21)
+                .is_none()
+        );
+        assert!(
+            toggle
+                .build_hotbar_packet(false, ProtocolVersion::V1_21)
+                .is_none()
+        );
     }
 
     #[test]

@@ -7,7 +7,8 @@ use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_brand::SERVER_BRAND;
 use crate::server_state::{
-    Scoreboard, ScoreboardPlaceholders, ServerCommand, ServerState, TabList, Title, TitleType,
+    RenderedScoreboard, Scoreboard, ScoreboardPlaceholders, ServerCommand, ServerState, TabList,
+    Title, TitleType,
 };
 use minecraft_packets::configuration::acknowledge_finish_configuration_packet::AcknowledgeConfigurationPacket;
 use minecraft_packets::login::Property;
@@ -328,6 +329,33 @@ pub fn build_scoreboard_packets(
     let Some(scoreboard) = server_state.scoreboard() else {
         return Ok(Vec::new());
     };
+    build_scoreboard_packets_with_mode(
+        client_state,
+        server_state,
+        scoreboard,
+        ScoreboardPacketMode::Create,
+    )
+}
+
+pub fn build_scoreboard_update_packets_from_rendered(
+    rendered: RenderedScoreboard,
+    protocol_version: ProtocolVersion,
+) -> Vec<PacketRegistry> {
+    build_scoreboard_packets_from_rendered(rendered, protocol_version, ScoreboardPacketMode::Update)
+}
+
+#[derive(Copy, Clone)]
+enum ScoreboardPacketMode {
+    Create,
+    Update,
+}
+
+fn build_scoreboard_packets_with_mode(
+    client_state: &ClientState,
+    server_state: &ServerState,
+    scoreboard: &Scoreboard,
+    mode: ScoreboardPacketMode,
+) -> Result<Vec<PacketRegistry>, PacketHandlerError> {
     let username = client_state.get_username();
     let placeholders = ScoreboardPlaceholders {
         player: &username,
@@ -338,30 +366,55 @@ pub fn build_scoreboard_packets(
     let rendered = scoreboard
         .render(&placeholders)
         .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+    Ok(build_scoreboard_packets_from_rendered(
+        rendered,
+        client_state.protocol_version(),
+        mode,
+    ))
+}
+
+fn build_scoreboard_packets_from_rendered(
+    rendered: RenderedScoreboard,
+    protocol_version: ProtocolVersion,
+    mode: ScoreboardPacketMode,
+) -> Vec<PacketRegistry> {
     let objective_name = Scoreboard::objective_name();
     let mut packets = Vec::with_capacity(2 + rendered.lines.len() * 2);
 
-    packets.push(PacketRegistry::SetObjective(SetObjectivePacket::create(
-        objective_name,
-        rendered.title,
-    )));
-    packets.push(PacketRegistry::SetDisplayObjective(
-        SetDisplayObjectivePacket::sidebar(objective_name),
-    ));
+    let objective = match mode {
+        ScoreboardPacketMode::Create => SetObjectivePacket::create(objective_name, rendered.title),
+        ScoreboardPacketMode::Update => SetObjectivePacket::update(objective_name, rendered.title),
+    };
+    packets.push(PacketRegistry::SetObjective(objective));
+    if matches!(mode, ScoreboardPacketMode::Create) {
+        packets.push(PacketRegistry::SetDisplayObjective(
+            SetDisplayObjectivePacket::sidebar(objective_name),
+        ));
+    }
 
     let line_count = i32::try_from(rendered.lines.len()).unwrap_or(0);
     for (index, line) in rendered.lines.into_iter().enumerate() {
         let entry = scoreboard_entry(index);
         let team_name = format!("plsb{index:02}");
         let score = line_count - i32::try_from(index).unwrap_or(0);
-        let (prefix, suffix) = scoreboard_line_parts(line, client_state.protocol_version());
-        packets.push(PacketRegistry::SetPlayerTeam(SetPlayerTeamPacket::create(
-            team_name,
-            Component::new(""),
-            prefix,
-            suffix,
-            vec![entry.clone()],
-        )));
+        let (prefix, suffix) = scoreboard_line_parts(line, protocol_version);
+        let team = match mode {
+            ScoreboardPacketMode::Create => SetPlayerTeamPacket::create(
+                team_name,
+                Component::new(""),
+                prefix,
+                suffix,
+                vec![entry.clone()],
+            ),
+            ScoreboardPacketMode::Update => SetPlayerTeamPacket::update(
+                team_name,
+                Component::new(""),
+                prefix,
+                suffix,
+                vec![entry.clone()],
+            ),
+        };
+        packets.push(PacketRegistry::SetPlayerTeam(team));
         packets.push(PacketRegistry::SetScore(SetScorePacket::change(
             entry,
             objective_name,
@@ -369,7 +422,7 @@ pub fn build_scoreboard_packets(
         )));
     }
 
-    Ok(packets)
+    packets
 }
 
 fn scoreboard_line_parts(
@@ -393,19 +446,23 @@ fn scoreboard_line_parts(
 }
 
 fn split_legacy_team_part(value: &str, max_chars: usize) -> (String, String) {
-    let chars = value.chars().collect::<Vec<_>>();
-    if chars.len() <= max_chars {
+    let mut indices = value.char_indices();
+    let Some((split_byte, last_char)) = indices.nth(max_chars.saturating_sub(1)) else {
+        return (value.to_string(), String::new());
+    };
+    if indices.next().is_none() {
         return (value.to_string(), String::new());
     }
 
-    let mut split = max_chars;
-    if chars.get(split - 1) == Some(&'\u{00a7}') {
-        split -= 1;
-    }
+    let split_byte = if last_char == '\u{00a7}' {
+        split_byte
+    } else {
+        split_byte + last_char.len_utf8()
+    };
 
     (
-        chars[..split].iter().collect(),
-        chars[split..].iter().collect(),
+        value[..split_byte].to_string(),
+        value[split_byte..].to_string(),
     )
 }
 

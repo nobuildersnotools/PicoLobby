@@ -14,24 +14,26 @@ pub use lobby::{
     LobbyLifecycleMessagePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc, LobbyNpcInteraction,
     LobbyNpcKind, LobbyNpcSpawnPlan, LobbyNpcValidationError, LobbyPosition,
     LobbyPrivateMessageError, LobbyPrivateMessagePlan, LobbyRecipient, LobbySession,
-    LobbySessionId, LobbyState, LobbySwingPlan,
+    LobbySessionId, LobbySpawnInfo, LobbyState, LobbySwingPlan, ScoreboardSessionSnapshot,
 };
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
-use minecraft_protocol::prelude::{BinaryReaderError, Dimension};
+use minecraft_protocol::prelude::{BinaryReaderError, Dimension, ProtocolVersion};
 pub use navigation::{LobbyDestination, NavigationError};
 use net::raw_packet::RawPacket;
+use pico_precomputed_registries::PrecomputedRegistries;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
 pub use selector::{
     LobbySelector, LobbyVisibilityToggle, OpenSelectorState, SelectorClick, build_selector_menu,
 };
 pub use server_commands::{ServerCommand, ServerCommands};
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::num::TryFromIntError;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -107,7 +109,7 @@ pub struct Scoreboard {
     pub update_interval: Duration,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct RenderedScoreboard {
     pub title: Component,
     pub lines: Vec<Component>,
@@ -261,9 +263,11 @@ pub struct ServerState {
     lobby_join_message: Option<String>,
     lobby_leave_message: Option<String>,
     lobby_destinations: Vec<LobbyDestination>,
+    lobby_destination_index: HashMap<String, usize>,
     lobby_selector: Option<LobbySelector>,
     lobby_visibility_toggle: Option<LobbyVisibilityToggle>,
     lobby_state: Arc<Mutex<LobbyState>>,
+    lobby_broadcast_senders: Arc<RwLock<HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>>>>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -342,7 +346,7 @@ impl ServerState {
         if self.lobby_enabled {
             u32::try_from(self.lobby_state().len()).unwrap_or(u32::MAX)
         } else {
-            self.connected_clients.load(Ordering::SeqCst)
+            self.connected_clients.load(Ordering::Relaxed)
         }
     }
 
@@ -474,9 +478,9 @@ impl ServerState {
         &self,
         id: &str,
     ) -> Result<&LobbyDestination, NavigationError> {
-        self.lobby_destinations
-            .iter()
-            .find(|d| d.id.as_str() == id)
+        self.lobby_destination_index
+            .get(id)
+            .and_then(|&index| self.lobby_destinations.get(index))
             .ok_or_else(|| NavigationError::UnknownDestination(id.to_string()))
     }
 
@@ -524,6 +528,7 @@ impl ServerState {
         );
         let mut session = session;
         session.chat_visibility = client_state.chat_visibility();
+        session.players_visible = client_state.players_visible();
         let session = self.lobby_state().insert(session);
         client_state.set_entity_id(session.entity_id.get());
         client_state.set_lobby_session_id(session.session_id);
@@ -538,8 +543,12 @@ impl ServerState {
             return None;
         }
 
-        self.lobby_state()
-            .remove_by_session_id_with_leave_plan(session_id?)
+        let session_id = session_id?;
+        let plan = self
+            .lobby_state()
+            .remove_by_session_id_with_leave_plan(session_id);
+        self.remove_lobby_broadcast_sender(session_id);
+        plan
     }
 
     #[allow(dead_code)]
@@ -616,6 +625,19 @@ impl ServerState {
             .update_chat_visibility(session_id, client_state.chat_visibility())
     }
 
+    pub fn update_lobby_players_visible(&self, client_state: &ClientState) -> bool {
+        if !self.lobby_enabled {
+            return false;
+        }
+
+        let Some(session_id) = client_state.lobby_session_id() else {
+            return false;
+        };
+
+        self.lobby_state()
+            .update_players_visible(session_id, client_state.players_visible())
+    }
+
     pub fn plan_lobby_chat_broadcast(
         &self,
         client_state: &ClientState,
@@ -651,22 +673,6 @@ impl ServerState {
             message,
             settings.sender_format.clone(),
             settings.recipient_format.clone(),
-        )
-    }
-
-    pub fn validate_lobby_private_message_target(
-        &self,
-        client_state: &ClientState,
-        target: &str,
-    ) -> Result<(), LobbyPrivateMessageError> {
-        if !self.lobby_enabled {
-            return Err(LobbyPrivateMessageError::Unavailable);
-        }
-        self.lobby_state().validate_private_message_target(
-            client_state
-                .lobby_session_id()
-                .ok_or(LobbyPrivateMessageError::Unavailable)?,
-            target,
         )
     }
 
@@ -758,25 +764,47 @@ impl ServerState {
         if !self.lobby_enabled {
             return;
         }
-        self.lobby_state().set_broadcast_sender(session_id, sender);
+        self.lobby_broadcast_senders
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session_id, sender);
+    }
+
+    pub fn remove_lobby_broadcast_sender(&self, session_id: LobbySessionId) {
+        if !self.lobby_enabled {
+            return;
+        }
+        self.lobby_broadcast_senders
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&session_id);
+    }
+
+    pub fn lobby_scoreboard_sessions(&self) -> Vec<ScoreboardSessionSnapshot> {
+        if !self.lobby_enabled {
+            return Vec::new();
+        }
+        self.lobby_state().scoreboard_sessions()
     }
 
     pub fn collect_lobby_broadcast_senders(
         &self,
         recipients: &[LobbyRecipient],
-    ) -> Vec<(LobbySessionId, mpsc::UnboundedSender<RawPacket>)> {
+    ) -> HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>> {
         if !self.lobby_enabled {
-            return Vec::new();
+            return HashMap::new();
         }
-        let lobby = self.lobby_state();
-        recipients
-            .iter()
-            .filter_map(|r| {
-                lobby
-                    .get_broadcast_sender(r.session_id)
-                    .map(|s| (r.session_id, s))
-            })
-            .collect()
+        let senders = self
+            .lobby_broadcast_senders
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut map = HashMap::with_capacity(recipients.len());
+        for r in recipients {
+            if let Some(sender) = senders.get(&r.session_id) {
+                map.insert(r.session_id, sender.clone());
+            }
+        }
+        map
     }
 
     #[allow(dead_code)]
@@ -798,11 +826,11 @@ impl ServerState {
     }
 
     pub fn increment(&self) {
-        self.connected_clients.fetch_add(1, Ordering::SeqCst);
+        self.connected_clients.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn decrement(&self) {
-        self.connected_clients.fetch_sub(1, Ordering::SeqCst);
+        self.connected_clients.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -886,6 +914,19 @@ pub enum ServerStateBuilderError {
     VisibilityToggleSlotConflict { slot: u8 },
     #[error("scoreboard objective name '{0}' is longer than 16 characters")]
     InvalidScoreboardObjectiveName(String),
+    #[error("lobby destination id cannot be empty")]
+    EmptyDestinationId,
+    #[error("lobby destination '{0}' is defined more than once")]
+    DuplicateDestinationId(String),
+    #[error("lobby destination '{0}' has an empty display name")]
+    EmptyDestinationDisplayName(String),
+    #[error("lobby {item_kind} slot {slot} is outside the hotbar range 0..=8")]
+    InvalidHotbarSlot { item_kind: &'static str, slot: u8 },
+    #[error("lobby {item_kind} item '{item}' is not known to the current item registry")]
+    UnknownLobbyItem {
+        item_kind: &'static str,
+        item: String,
+    },
 }
 
 impl ServerStateBuilder {
@@ -1000,9 +1041,10 @@ impl ServerStateBuilder {
         config: Option<SelectorItemConfig>,
     ) -> Result<&mut Self, ServerStateBuilderError> {
         if let Some(cfg) = config {
-            let slot = cfg.slot.min(8);
+            validate_hotbar_slot("selector", cfg.slot)?;
             let selector =
-                LobbySelector::new(slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?;
+                LobbySelector::new(cfg.slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?;
+            validate_lobby_item("selector", &selector.item_identifier)?;
             self.lobby_selector = Some(selector);
         }
         Ok(self)
@@ -1015,7 +1057,9 @@ impl ServerStateBuilder {
         config: Option<VisibilityToggleConfig>,
     ) -> Result<&mut Self, ServerStateBuilderError> {
         if let Some(cfg) = config {
+            validate_hotbar_slot("visibility toggle", cfg.slot)?;
             let toggle = LobbyVisibilityToggle::new(cfg)?;
+            validate_lobby_item("visibility toggle", &toggle.item_identifier)?;
             self.lobby_visibility_toggle = Some(toggle);
         }
         Ok(self)
@@ -1025,11 +1069,24 @@ impl ServerStateBuilder {
         &mut self,
         destinations: Vec<LobbyDestination>,
     ) -> Result<&mut Self, ServerStateBuilderError> {
+        let mut ids = HashSet::new();
         for dest in &destinations {
-            if dest.server.trim().is_empty() {
-                return Err(ServerStateBuilderError::EmptyServerName(
-                    dest.id.as_str().to_string(),
+            let id = dest.id.as_str();
+            if id.trim().is_empty() {
+                return Err(ServerStateBuilderError::EmptyDestinationId);
+            }
+            if !ids.insert(id.to_string()) {
+                return Err(ServerStateBuilderError::DuplicateDestinationId(
+                    id.to_string(),
                 ));
+            }
+            if dest.display_name.trim().is_empty() {
+                return Err(ServerStateBuilderError::EmptyDestinationDisplayName(
+                    id.to_string(),
+                ));
+            }
+            if dest.server.trim().is_empty() {
+                return Err(ServerStateBuilderError::EmptyServerName(id.to_string()));
             }
         }
         self.lobby_destinations = destinations;
@@ -1295,10 +1352,17 @@ impl ServerStateBuilder {
             lobby_private_messages: self.lobby_private_messages,
             lobby_join_message: optional_lifecycle_template(&self.lobby_join_message)?,
             lobby_leave_message: optional_lifecycle_template(&self.lobby_leave_message)?,
+            lobby_destination_index: self
+                .lobby_destinations
+                .iter()
+                .enumerate()
+                .map(|(index, dest)| (dest.id.as_str().to_string(), index))
+                .collect(),
             lobby_destinations: self.lobby_destinations,
             lobby_selector: self.lobby_selector,
             lobby_visibility_toggle: self.lobby_visibility_toggle,
             lobby_state: Arc::new(Mutex::new(LobbyState::with_npcs(self.lobby_npcs))),
+            lobby_broadcast_senders: Arc::new(RwLock::new(HashMap::new())),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
             hardcore: self.hardcore,
@@ -1350,6 +1414,44 @@ fn validate_scoreboard_identifier(value: &str) -> Result<(), ServerStateBuilderE
         ))
     } else {
         Ok(())
+    }
+}
+
+const fn validate_hotbar_slot(
+    item_kind: &'static str,
+    slot: u8,
+) -> Result<(), ServerStateBuilderError> {
+    if slot <= 8 {
+        Ok(())
+    } else {
+        Err(ServerStateBuilderError::InvalidHotbarSlot { item_kind, slot })
+    }
+}
+
+fn validate_lobby_item(item_kind: &'static str, item: &str) -> Result<(), ServerStateBuilderError> {
+    if PrecomputedRegistries::new(ProtocolVersion::V26_1)
+        .resolve_item_id(item)
+        .is_some()
+        || legacy_item_id_for_current_validation(item).is_some()
+    {
+        Ok(())
+    } else {
+        Err(ServerStateBuilderError::UnknownLobbyItem {
+            item_kind,
+            item: item.to_string(),
+        })
+    }
+}
+
+fn legacy_item_id_for_current_validation(item: &str) -> Option<i32> {
+    match item {
+        "minecraft:compass" => Some(345),
+        "minecraft:paper" => Some(339),
+        "minecraft:ender_eye" => Some(381),
+        "minecraft:nether_star" => Some(399),
+        "minecraft:clock" => Some(347),
+        "minecraft:book" => Some(340),
+        _ => None,
     }
 }
 
@@ -1619,6 +1721,56 @@ mod tests {
         assert!(builder.build().is_ok());
     }
 
+    #[test]
+    fn invalid_hotbar_slots_are_rejected() {
+        let mut builder = ServerState::builder();
+        assert!(matches!(
+            builder.set_lobby_selector(Some(SelectorItemConfig {
+                slot: 99,
+                item: "minecraft:compass".to_string(),
+                display_name: None,
+                lore: vec![],
+            })),
+            Err(ServerStateBuilderError::InvalidHotbarSlot {
+                item_kind: "selector",
+                slot: 99
+            })
+        ));
+
+        let mut builder = ServerState::builder();
+        assert!(matches!(
+            builder.set_lobby_visibility_toggle(Some(visibility_toggle_config(99))),
+            Err(ServerStateBuilderError::InvalidHotbarSlot {
+                item_kind: "visibility toggle",
+                slot: 99
+            })
+        ));
+    }
+
+    #[test]
+    fn hidden_players_do_not_receive_future_join_recipients() {
+        let server_state = server_state(true);
+        let mut hidden = client("hidden", Uuid::from_u128(1));
+        let mut joining = client("joining", Uuid::from_u128(2));
+
+        server_state.register_lobby_session(&mut hidden).unwrap();
+        hidden.toggle_players_visible();
+        assert!(server_state.update_lobby_players_visible(&hidden));
+
+        let joining_session = server_state.register_lobby_session(&mut joining).unwrap();
+        let join_plan = server_state
+            .plan_lobby_join(joining_session.session_id)
+            .expect("join plan");
+
+        assert!(
+            join_plan
+                .existing_sessions
+                .iter()
+                .any(|s| s.username == "hidden")
+        );
+        assert!(join_plan.existing_recipients.is_empty());
+    }
+
     fn server_with_destinations(destinations: Vec<LobbyDestination>) -> ServerState {
         let mut builder = ServerState::builder();
         builder.set_lobby_enabled(true);
@@ -1654,6 +1806,27 @@ mod tests {
         assert!(matches!(
             builder.set_lobby_destinations(vec![LobbyDestination::new("survival", "Survival", "")]),
             Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"
+        ));
+
+        let mut builder = ServerState::builder();
+        assert!(matches!(
+            builder.set_lobby_destinations(vec![LobbyDestination::new("", "Survival", "survival")]),
+            Err(ServerStateBuilderError::EmptyDestinationId)
+        ));
+
+        let mut builder = ServerState::builder();
+        assert!(matches!(
+            builder.set_lobby_destinations(vec![
+                LobbyDestination::new("survival", "Survival", "survival"),
+                LobbyDestination::new("survival", "Survival 2", "survival-2"),
+            ]),
+            Err(ServerStateBuilderError::DuplicateDestinationId(id)) if id == "survival"
+        ));
+
+        let mut builder = ServerState::builder();
+        assert!(matches!(
+            builder.set_lobby_destinations(vec![LobbyDestination::new("survival", "", "survival")]),
+            Err(ServerStateBuilderError::EmptyDestinationDisplayName(id)) if id == "survival"
         ));
 
         // NPC referencing unknown destination rejected at build time

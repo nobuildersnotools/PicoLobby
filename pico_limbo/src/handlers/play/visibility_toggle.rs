@@ -23,6 +23,7 @@ pub fn handle_visibility_toggle(
     }
 
     let new_visible = client_state.toggle_players_visible();
+    server_state.update_lobby_players_visible(client_state);
     let version = client_state.protocol_version();
 
     let join_plan: Option<LobbyJoinPlan> =

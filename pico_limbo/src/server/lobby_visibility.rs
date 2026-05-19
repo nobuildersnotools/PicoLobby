@@ -1,7 +1,7 @@
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{
     EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc,
-    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySession, LobbySwingPlan,
+    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySpawnInfo, LobbySwingPlan,
 };
 use minecraft_packets::play::animate_packet::AnimatePacket;
 use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
@@ -344,21 +344,21 @@ fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<
         LobbyNpcKind::Player => {}
     }
 
-    let mut session = LobbySession::new(
-        npc.uuid,
-        npc.name.clone(),
-        None,
-        recipient_version,
-        npc.position,
-    );
-    session.entity_id = npc.entity_id;
+    let spawn = LobbySpawnInfo {
+        uuid: npc.uuid,
+        username: npc.name.clone(),
+        textures: None,
+        entity_id: npc.entity_id,
+        position: npc.position,
+        crouching: false,
+    };
 
     let mut packets = if recipient_version.is_after_inclusive(ProtocolVersion::V1_20_2) {
-        player_spawn_packets_current(&session)
+        player_spawn_packets_current(&spawn)
     } else if recipient_version.is_after_inclusive(ProtocolVersion::V1_7_2)
         && recipient_version.is_before_inclusive(ProtocolVersion::V1_20)
     {
-        player_spawn_packets_legacy(&session, recipient_version)
+        player_spawn_packets_legacy(&spawn, recipient_version)
     } else {
         Vec::new()
     };
@@ -393,7 +393,7 @@ fn npc_player_info_remove_packet(
     }
 }
 
-fn player_info_packet(player: &LobbySession) -> PacketRegistry {
+fn player_info_packet(player: &LobbySpawnInfo) -> PacketRegistry {
     player.textures.as_ref().map_or_else(
         || {
             PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::skinless(
@@ -413,7 +413,7 @@ fn player_info_packet(player: &LobbySession) -> PacketRegistry {
     )
 }
 
-fn player_spawn_packets_current(player: &LobbySession) -> Vec<PacketRegistry> {
+fn player_spawn_packets_current(player: &LobbySpawnInfo) -> Vec<PacketRegistry> {
     let player_info = player_info_packet(player);
     let spawn = PacketRegistry::SpawnEntity(SpawnEntityPacket::spawn_player(
         player.entity_id.get(),
@@ -436,7 +436,7 @@ fn player_spawn_packets_current(player: &LobbySession) -> Vec<PacketRegistry> {
 }
 
 fn player_spawn_packets_legacy(
-    player: &LobbySession,
+    player: &LobbySpawnInfo,
     version: ProtocolVersion,
 ) -> Vec<PacketRegistry> {
     let player_info = player_info_packet(player);
@@ -965,32 +965,57 @@ mod tests {
         );
     }
 
-    fn make_session(session_id: u64, uuid_val: u128, entity_id: i32) -> LobbySession {
-        let mut session = LobbySession::new(
-            Uuid::from_u128(uuid_val),
-            format!("player{session_id}"),
-            None,
-            ProtocolVersion::V1_21,
-            LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
-        );
-        session.session_id = LobbySessionId::new(session_id);
-        session.entity_id = EntityId::new(entity_id);
-        session
+    fn make_session(session_id: u64, uuid_val: u128, entity_id: i32) -> SessionForTest {
+        SessionForTest {
+            session_id: LobbySessionId::new(session_id),
+            uuid: Uuid::from_u128(uuid_val),
+            username: format!("player{session_id}"),
+            entity_id: EntityId::new(entity_id),
+            protocol_version: ProtocolVersion::V1_21,
+            position: LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
+            crouching: false,
+        }
     }
 
-    fn join_plan(new: LobbySession, existing: Vec<LobbySession>) -> LobbyJoinPlan {
-        let existing_recipients = existing
-            .iter()
-            .map(|s| LobbyRecipient {
-                session_id: s.session_id,
-                uuid: s.uuid,
-                entity_id: s.entity_id,
-                protocol_version: s.protocol_version,
-            })
-            .collect();
+    struct SessionForTest {
+        session_id: LobbySessionId,
+        uuid: Uuid,
+        username: String,
+        entity_id: EntityId,
+        protocol_version: ProtocolVersion,
+        position: LobbyPosition,
+        crouching: bool,
+    }
+
+    impl SessionForTest {
+        fn to_spawn(&self) -> LobbySpawnInfo {
+            LobbySpawnInfo {
+                uuid: self.uuid,
+                username: self.username.clone(),
+                textures: None,
+                entity_id: self.entity_id,
+                position: self.position,
+                crouching: self.crouching,
+            }
+        }
+
+        fn to_recipient(&self) -> LobbyRecipient {
+            LobbyRecipient {
+                session_id: self.session_id,
+                uuid: self.uuid,
+                entity_id: self.entity_id,
+                protocol_version: self.protocol_version,
+            }
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn join_plan(new: SessionForTest, existing: Vec<SessionForTest>) -> LobbyJoinPlan {
+        let existing_recipients = existing.iter().map(SessionForTest::to_recipient).collect();
+        let existing_sessions = existing.iter().map(SessionForTest::to_spawn).collect();
         LobbyJoinPlan {
-            new_session: new,
-            existing_sessions: existing,
+            new_session: new.to_spawn(),
+            existing_sessions,
             existing_recipients,
         }
     }
@@ -1342,6 +1367,8 @@ mod tests {
             LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
         );
         npc.entity_id = EntityId::new(300);
-        LobbyNpcSpawnPlan { npcs: vec![npc] }
+        LobbyNpcSpawnPlan {
+            npcs: std::sync::Arc::from(vec![npc]),
+        }
     }
 }

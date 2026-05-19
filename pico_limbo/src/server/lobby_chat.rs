@@ -10,11 +10,11 @@ use pico_text_component::prelude::{Component, parse_mini_message};
 pub const MAX_CHAT_MESSAGE_CHARS: usize = 256;
 
 pub fn chat_packets_for_plan(plan: &LobbyChatPlan) -> Vec<(LobbyRecipient, PacketRegistry)> {
+    let component = format_lobby_chat(&plan.sender_username, &plan.message, &plan.format);
     plan.recipients
         .iter()
         .cloned()
         .map(|recipient| {
-            let component = format_lobby_chat(&plan.sender_username, &plan.message, &plan.format);
             let packet = chat_packet_for_version(recipient.protocol_version, &component);
             (recipient, packet)
         })
@@ -24,11 +24,11 @@ pub fn chat_packets_for_plan(plan: &LobbyChatPlan) -> Vec<(LobbyRecipient, Packe
 pub fn lifecycle_message_packets_for_plan(
     plan: &LobbyLifecycleMessagePlan,
 ) -> Vec<(LobbyRecipient, PacketRegistry)> {
+    let component = format_lobby_lifecycle_message(&plan.player_username, &plan.template);
     plan.recipients
         .iter()
         .cloned()
         .map(|recipient| {
-            let component = format_lobby_lifecycle_message(&plan.player_username, &plan.template);
             let packet = chat_packet_for_version(recipient.protocol_version, &component);
             (recipient, packet)
         })
@@ -129,7 +129,7 @@ fn format_private_message_for_recipient(plan: &LobbyPrivateMessagePlan) -> Compo
     })
 }
 
-fn escape_minimessage_text(input: &str) -> String {
+pub fn escape_minimessage_text(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")

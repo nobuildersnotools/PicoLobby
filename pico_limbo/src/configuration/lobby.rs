@@ -26,7 +26,6 @@ pub const DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT: &str =
 pub const DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE: &str =
     "<red>Private messages are only available in the lobby.</red>";
 
-
 /// A downstream server reachable via the Velocity proxy.
 /// `server` must match a key in Velocity's `[servers]` block.
 #[derive(Serialize, Deserialize)]

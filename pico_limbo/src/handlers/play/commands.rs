@@ -2,7 +2,8 @@ use crate::handlers::play::set_player_position_and_rotation::teleport_player_to_
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
 use crate::server::lobby_chat::{
-    MAX_CHAT_MESSAGE_CHARS, chat_feedback_packet, plain_chat_feedback_packet,
+    MAX_CHAT_MESSAGE_CHARS, chat_feedback_packet, escape_minimessage_text,
+    plain_chat_feedback_packet,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
@@ -82,8 +83,8 @@ fn run_command(
         command
     );
 
-    if let Ok(parsed_command) = Command::parse(server_state.server_commands(), command) {
-        match parsed_command {
+    match Command::parse(server_state.server_commands(), command) {
+        Ok(parsed_command) => match parsed_command {
             Command::Spawn => {
                 teleport_player_to_spawn(client_state, server_state, batch);
             }
@@ -121,7 +122,7 @@ fn run_command(
                     );
                     let packet = TransferPacket {
                         host,
-                        port: VarInt::from(port),
+                        port: VarInt::from(i32::from(port)),
                     };
                     batch.queue(|| PacketRegistry::Transfer(packet));
                 } else {
@@ -165,6 +166,12 @@ fn run_command(
             Command::Reply { message } => {
                 handle_reply_command(client_state, server_state, &message, batch);
             }
+        },
+        Err(ParseCommandError::Unknown) => {}
+        Err(err) => {
+            let version = client_state.protocol_version();
+            let msg = format!("Invalid command usage: {err}");
+            batch.queue(move || plain_chat_feedback_packet(version, &msg));
         }
     }
 }
@@ -187,11 +194,6 @@ fn handle_private_message_command(
     if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
         let feedback = settings.too_long.clone();
         batch.queue(move || chat_feedback_packet(version, &feedback));
-        return;
-    }
-
-    if let Err(err) = server_state.validate_lobby_private_message_target(client_state, target) {
-        queue_private_message_error(batch, version, settings, err, target);
         return;
     }
 
@@ -288,7 +290,7 @@ pub enum ParseCommandError {
     #[error("invalid hostname")]
     InvalidHost,
     #[error("invalid port")]
-    InvalidPort(#[from] std::num::ParseIntError),
+    InvalidPort,
     #[error("missing destination id")]
     MissingDestinationId,
     #[error("missing private-message target")]
@@ -300,7 +302,7 @@ enum Command {
     Spawn,
     Fly,
     FlySpeed(f32),
-    Transfer(String, i32),
+    Transfer(String, u16),
     Server(String),
     Msg { target: String, message: String },
     Reply { message: String },
@@ -325,7 +327,9 @@ impl Command {
                 .ok_or(ParseCommandError::InvalidHost)?
                 .to_string();
             let port_str = parts.next().unwrap_or("25565");
-            let port = port_str.parse::<i32>()?;
+            let port = port_str
+                .parse::<u16>()
+                .map_err(|_| ParseCommandError::InvalidPort)?;
             Ok(Self::Transfer(host, port))
         } else if Self::is_command(server_commands.server(), cmd) {
             let id = rest
@@ -378,13 +382,6 @@ fn split_first_word(input: &str) -> Option<(&str, &str)> {
     let word = &input[..word_end];
     let rest = input[word_end..].trim();
     Some((word, rest))
-}
-
-fn escape_minimessage_text(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -585,6 +582,41 @@ mod tests {
                 message: "hello".to_string()
             }
         );
+    }
+
+    #[test]
+    fn transfer_port_must_fit_u16() {
+        let commands = ServerCommands::from(CommandsConfig::default());
+
+        assert!(matches!(
+            Command::parse(&commands, "transfer example.org -1"),
+            Err(ParseCommandError::InvalidPort)
+        ));
+        assert!(matches!(
+            Command::parse(&commands, "transfer example.org 70000"),
+            Err(ParseCommandError::InvalidPort)
+        ));
+        assert_eq!(
+            Command::parse(&commands, "transfer example.org 25565").unwrap(),
+            Command::Transfer("example.org".to_string(), 25565)
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_known_command_sends_feedback() {
+        let mut client = client();
+        let server = server();
+        let mut batch = Batch::new();
+
+        run_command(
+            &mut client,
+            &server,
+            "transfer example.org 70000",
+            &mut batch,
+        );
+
+        let packets = batch.into_stream().collect::<Vec<_>>().await;
+        assert_eq!(packets.len(), 1);
     }
 
     #[test]

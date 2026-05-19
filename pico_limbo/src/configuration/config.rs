@@ -153,7 +153,10 @@ mod tests {
         let config = Config::default();
 
         assert!(config.lobby.antispam.enabled);
-        assert_eq!(config.lobby.antispam.chat_cooldown_ms, DEFAULT_CHAT_COOLDOWN_MS);
+        assert_eq!(
+            config.lobby.antispam.chat_cooldown_ms,
+            DEFAULT_CHAT_COOLDOWN_MS
+        );
         assert_eq!(config.lobby.antispam.message, DEFAULT_CHAT_ANTISPAM_MESSAGE);
     }
 
@@ -162,7 +165,10 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
 
         assert!(config.lobby.antispam.enabled);
-        assert_eq!(config.lobby.antispam.chat_cooldown_ms, DEFAULT_CHAT_COOLDOWN_MS);
+        assert_eq!(
+            config.lobby.antispam.chat_cooldown_ms,
+            DEFAULT_CHAT_COOLDOWN_MS
+        );
         assert_eq!(config.lobby.antispam.message, DEFAULT_CHAT_ANTISPAM_MESSAGE);
     }
 

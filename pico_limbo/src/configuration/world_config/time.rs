@@ -1,7 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use std::str::FromStr;
 
-#[derive(Serialize, Default)]
+#[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TimeConfig {
     #[default]

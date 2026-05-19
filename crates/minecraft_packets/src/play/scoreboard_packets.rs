@@ -10,6 +10,7 @@ const TEAM_COLLISION_ALWAYS: i32 = 0;
 pub struct SetObjectivePacket {
     name: String,
     title: Component,
+    mode: i8,
 }
 
 impl SetObjectivePacket {
@@ -17,6 +18,15 @@ impl SetObjectivePacket {
         Self {
             name: name.into(),
             title,
+            mode: 0,
+        }
+    }
+
+    pub fn update(name: impl Into<String>, title: Component) -> Self {
+        Self {
+            name: name.into(),
+            title,
+            mode: 2,
         }
     }
 }
@@ -30,9 +40,9 @@ impl EncodePacket for SetObjectivePacket {
         self.name.encode(writer, protocol_version)?;
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_7_6) {
             truncate_chars(&self.title.to_legacy_text(), 32).encode(writer, protocol_version)?;
-            0_i8.encode(writer, protocol_version)?;
+            self.mode.encode(writer, protocol_version)?;
         } else {
-            0_i8.encode(writer, protocol_version)?;
+            self.mode.encode(writer, protocol_version)?;
             if protocol_version.is_before_inclusive(ProtocolVersion::V1_12_2) {
                 truncate_chars(&self.title.to_legacy_text(), 32)
                     .encode(writer, protocol_version)?;
@@ -148,6 +158,7 @@ impl EncodePacket for ResetScorePacket {
 
 pub struct SetPlayerTeamPacket {
     name: String,
+    mode: i8,
     display_name: Component,
     prefix: Component,
     suffix: Component,
@@ -164,6 +175,24 @@ impl SetPlayerTeamPacket {
     ) -> Self {
         Self {
             name: name.into(),
+            mode: 0,
+            display_name,
+            prefix,
+            suffix,
+            entries,
+        }
+    }
+
+    pub fn update(
+        name: impl Into<String>,
+        display_name: Component,
+        prefix: Component,
+        suffix: Component,
+        entries: Vec<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            mode: 2,
             display_name,
             prefix,
             suffix,
@@ -179,7 +208,7 @@ impl EncodePacket for SetPlayerTeamPacket {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         self.name.encode(writer, protocol_version)?;
-        0_i8.encode(writer, protocol_version)?;
+        self.mode.encode(writer, protocol_version)?;
 
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_12_2) {
             truncate_chars(&self.display_name.to_legacy_text(), 32)
@@ -193,13 +222,17 @@ impl EncodePacket for SetPlayerTeamPacket {
                     "always".to_string().encode(writer, protocol_version)?;
                 }
                 TEAM_COLOR_RESET_LEGACY.encode(writer, protocol_version)?;
-                LengthPaddedVec::new(self.entries.clone()).encode(writer, protocol_version)?;
+                if self.mode == 0 {
+                    LengthPaddedVec::new(self.entries.clone()).encode(writer, protocol_version)?;
+                }
             } else {
-                i16::try_from(self.entries.len())
-                    .unwrap_or(i16::MAX)
-                    .encode(writer, protocol_version)?;
-                for entry in &self.entries {
-                    entry.encode(writer, protocol_version)?;
+                if self.mode == 0 {
+                    i16::try_from(self.entries.len())
+                        .unwrap_or(i16::MAX)
+                        .encode(writer, protocol_version)?;
+                    for entry in &self.entries {
+                        entry.encode(writer, protocol_version)?;
+                    }
                 }
             }
         } else {
@@ -215,7 +248,9 @@ impl EncodePacket for SetPlayerTeamPacket {
             VarInt::new(TEAM_COLOR_RESET_MODERN).encode(writer, protocol_version)?;
             self.prefix.encode(writer, protocol_version)?;
             self.suffix.encode(writer, protocol_version)?;
-            LengthPaddedVec::new(self.entries.clone()).encode(writer, protocol_version)?;
+            if self.mode == 0 {
+                LengthPaddedVec::new(self.entries.clone()).encode(writer, protocol_version)?;
+            }
         }
         Ok(())
     }

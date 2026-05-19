@@ -1,8 +1,7 @@
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
-use net::raw_packet::RawPacket;
 use std::collections::{HashMap, HashSet};
-use tokio::sync::mpsc;
+use std::sync::Arc;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct EntityId(i32);
@@ -100,6 +99,7 @@ pub struct LobbySession {
     pub position: LobbyPosition,
     pub crouching: bool,
     pub chat_visibility: ChatVisibility,
+    pub players_visible: bool,
     #[allow(dead_code)]
     pub lifecycle: LobbySessionLifecycle,
 }
@@ -122,6 +122,7 @@ impl LobbySession {
             position,
             crouching: false,
             chat_visibility: ChatVisibility::Unknown,
+            players_visible: true,
             lifecycle: LobbySessionLifecycle::Joined,
         }
     }
@@ -178,13 +179,33 @@ impl LobbyNpc {
 
 #[derive(Clone)]
 pub struct LobbyNpcSpawnPlan {
-    pub npcs: Vec<LobbyNpc>,
+    pub npcs: Arc<[LobbyNpc]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LobbyNpcInteraction {
     pub npc_id: LobbyNpcId,
     pub destination_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScoreboardSessionSnapshot {
+    pub session_id: LobbySessionId,
+    pub uuid: Uuid,
+    pub entity_id: EntityId,
+    pub username: String,
+    pub protocol_version: ProtocolVersion,
+}
+
+impl ScoreboardSessionSnapshot {
+    pub const fn to_recipient(&self) -> LobbyRecipient {
+        LobbyRecipient {
+            session_id: self.session_id,
+            uuid: self.uuid,
+            entity_id: self.entity_id,
+            protocol_version: self.protocol_version,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,9 +251,32 @@ pub struct LobbySwingPlan {
 }
 
 #[derive(Clone)]
+pub struct LobbySpawnInfo {
+    pub uuid: Uuid,
+    pub username: String,
+    pub textures: Option<Property>,
+    pub entity_id: EntityId,
+    pub position: LobbyPosition,
+    pub crouching: bool,
+}
+
+impl LobbySpawnInfo {
+    fn from_session(session: &LobbySession) -> Self {
+        Self {
+            uuid: session.uuid,
+            username: session.username.clone(),
+            textures: session.textures.clone(),
+            entity_id: session.entity_id,
+            position: session.position,
+            crouching: session.crouching,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct LobbyJoinPlan {
-    pub new_session: LobbySession,
-    pub existing_sessions: Vec<LobbySession>,
+    pub new_session: LobbySpawnInfo,
+    pub existing_sessions: Vec<LobbySpawnInfo>,
     pub existing_recipients: Vec<LobbyRecipient>,
 }
 
@@ -268,13 +312,12 @@ pub struct LobbyLifecycleMessagePlan {
 pub struct LobbyState {
     next_session_id: u64,
     next_entity_id: i32,
-    npcs: Vec<LobbyNpc>,
+    npcs: Arc<[LobbyNpc]>,
     npc_entity_to_index: HashMap<EntityId, usize>,
     sessions_by_uuid: HashMap<Uuid, LobbySession>,
     entity_to_uuid: HashMap<EntityId, Uuid>,
     session_to_uuid: HashMap<LobbySessionId, Uuid>,
     reply_peers: HashMap<LobbySessionId, Uuid>,
-    broadcast_senders: HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>>,
 }
 
 impl LobbyState {
@@ -286,13 +329,12 @@ impl LobbyState {
         let mut state = Self {
             next_session_id: LobbySessionId::FIRST,
             next_entity_id: EntityId::FIRST_PLAYER_ID,
-            npcs: Vec::new(),
+            npcs: Arc::from(Vec::<LobbyNpc>::new()),
             npc_entity_to_index: HashMap::new(),
             sessions_by_uuid: HashMap::new(),
             entity_to_uuid: HashMap::new(),
             session_to_uuid: HashMap::new(),
             reply_peers: HashMap::new(),
-            broadcast_senders: HashMap::new(),
         };
 
         for npc in &mut npcs {
@@ -303,7 +345,7 @@ impl LobbyState {
             .enumerate()
             .map(|(index, npc)| (npc.entity_id, index))
             .collect();
-        state.npcs = npcs;
+        state.npcs = Arc::from(npcs);
         state
     }
 
@@ -337,9 +379,22 @@ impl LobbyState {
         Ok(())
     }
 
+    pub fn scoreboard_sessions(&self) -> Vec<ScoreboardSessionSnapshot> {
+        self.sessions_by_uuid
+            .values()
+            .map(|s| ScoreboardSessionSnapshot {
+                session_id: s.session_id,
+                uuid: s.uuid,
+                entity_id: s.entity_id,
+                username: s.username.clone(),
+                protocol_version: s.protocol_version,
+            })
+            .collect()
+    }
+
     pub fn plan_npc_spawn(&self) -> LobbyNpcSpawnPlan {
         LobbyNpcSpawnPlan {
-            npcs: self.npcs.clone(),
+            npcs: Arc::clone(&self.npcs),
         }
     }
 
@@ -374,8 +429,12 @@ impl LobbyState {
         self.session_to_uuid
             .insert(session.session_id, session.uuid);
         self.entity_to_uuid.insert(session.entity_id, session.uuid);
-        self.sessions_by_uuid.insert(session.uuid, session.clone());
-        session
+        let uuid = session.uuid;
+        self.sessions_by_uuid.insert(uuid, session);
+        self.sessions_by_uuid
+            .get(&uuid)
+            .expect("session was just inserted")
+            .clone()
     }
 
     #[allow(dead_code)]
@@ -384,7 +443,6 @@ impl LobbyState {
         self.entity_to_uuid.remove(&session.entity_id);
         self.session_to_uuid.remove(&session.session_id);
         self.reply_peers.remove(&session.session_id);
-        self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
 
@@ -393,7 +451,6 @@ impl LobbyState {
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.entity_to_uuid.remove(&session.entity_id);
         self.reply_peers.remove(&session_id);
-        self.broadcast_senders.remove(&session_id);
         Some(session)
     }
 
@@ -419,7 +476,6 @@ impl LobbyState {
         let session = self.sessions_by_uuid.remove(&uuid)?;
         self.session_to_uuid.remove(&session.session_id);
         self.reply_peers.remove(&session.session_id);
-        self.broadcast_senders.remove(&session.session_id);
         Some(session)
     }
 
@@ -518,6 +574,21 @@ impl LobbyState {
         true
     }
 
+    pub fn update_players_visible(
+        &mut self,
+        session_id: LobbySessionId,
+        players_visible: bool,
+    ) -> bool {
+        let Some(uuid) = self.session_to_uuid.get(&session_id) else {
+            return false;
+        };
+        let Some(session) = self.sessions_by_uuid.get_mut(uuid) else {
+            return false;
+        };
+        session.players_visible = players_visible;
+        true
+    }
+
     pub fn plan_chat_broadcast(
         &self,
         sender_session_id: LobbySessionId,
@@ -556,18 +627,6 @@ impl LobbyState {
             sender_format,
             recipient_format,
         )
-    }
-
-    pub fn validate_private_message_target(
-        &self,
-        sender_session_id: LobbySessionId,
-        target: &str,
-    ) -> Result<(), LobbyPrivateMessageError> {
-        let sender = self
-            .session_by_session_id(sender_session_id)
-            .ok_or(LobbyPrivateMessageError::Unavailable)?;
-        let recipient = self.find_session_by_username_ignore_case(target)?;
-        validate_private_message_pair(sender, &recipient)
     }
 
     pub fn validate_reply_target(
@@ -643,24 +702,21 @@ impl LobbyState {
         &self,
         exclude_session_id: Option<LobbySessionId>,
     ) -> Vec<LobbyRecipient> {
-        let mut recipients = self
-            .sessions_by_uuid
+        self.sessions_by_uuid
             .values()
             .filter(|session| Some(session.session_id) != exclude_session_id)
+            .filter(|session| session.players_visible)
             .map(|session| LobbyRecipient {
                 session_id: session.session_id,
                 uuid: session.uuid,
                 entity_id: session.entity_id,
                 protocol_version: session.protocol_version,
             })
-            .collect::<Vec<_>>();
-        recipients.sort_by_key(|recipient| recipient.session_id);
-        recipients
+            .collect()
     }
 
     fn plan_chat_recipients(&self) -> Vec<LobbyRecipient> {
-        let mut recipients = self
-            .sessions_by_uuid
+        self.sessions_by_uuid
             .values()
             .filter(|session| session.chat_visibility.receives_normal_chat())
             .map(|session| LobbyRecipient {
@@ -669,9 +725,7 @@ impl LobbyState {
                 entity_id: session.entity_id,
                 protocol_version: session.protocol_version,
             })
-            .collect::<Vec<_>>();
-        recipients.sort_by_key(|recipient| recipient.session_id);
-        recipients
+            .collect()
     }
 
     fn plan_private_message_to_session(
@@ -704,31 +758,32 @@ impl LobbyState {
         &self,
         target: &str,
     ) -> Result<LobbySession, LobbyPrivateMessageError> {
-        let matches = self
+        let mut iter = self
             .sessions_by_uuid
             .values()
-            .filter(|session| session.username.eq_ignore_ascii_case(target))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        match matches.as_slice() {
-            [] => Err(LobbyPrivateMessageError::UnknownTarget),
-            [session] => Ok(session.clone()),
-            _ => Err(LobbyPrivateMessageError::AmbiguousTarget),
+            .filter(|session| session.username.eq_ignore_ascii_case(target));
+        match (iter.next(), iter.next()) {
+            (None, _) => Err(LobbyPrivateMessageError::UnknownTarget),
+            (Some(_), Some(_)) => Err(LobbyPrivateMessageError::AmbiguousTarget),
+            (Some(session), None) => Ok(session.clone()),
         }
     }
 
     pub fn plan_join_visibility(&self, new_session_id: LobbySessionId) -> Option<LobbyJoinPlan> {
         let uuid = self.session_to_uuid.get(&new_session_id)?;
-        let new_session = self.sessions_by_uuid.get(uuid)?.clone();
+        let new_session = LobbySpawnInfo::from_session(self.sessions_by_uuid.get(uuid)?);
 
-        let mut existing_sessions: Vec<LobbySession> = self
+        let mut existing_sessions: Vec<(LobbySessionId, LobbySpawnInfo)> = self
             .sessions_by_uuid
             .values()
             .filter(|s| s.session_id != new_session_id)
-            .cloned()
+            .map(|s| (s.session_id, LobbySpawnInfo::from_session(s)))
             .collect();
-        existing_sessions.sort_by_key(|s| s.session_id);
+        existing_sessions.sort_by_key(|(session_id, _)| *session_id);
+        let existing_sessions = existing_sessions
+            .into_iter()
+            .map(|(_, info)| info)
+            .collect();
 
         let existing_recipients = self.plan_recipients(Some(new_session_id));
 
@@ -737,21 +792,6 @@ impl LobbyState {
             existing_sessions,
             existing_recipients,
         })
-    }
-
-    pub fn set_broadcast_sender(
-        &mut self,
-        session_id: LobbySessionId,
-        sender: mpsc::UnboundedSender<RawPacket>,
-    ) {
-        self.broadcast_senders.insert(session_id, sender);
-    }
-
-    pub fn get_broadcast_sender(
-        &self,
-        session_id: LobbySessionId,
-    ) -> Option<mpsc::UnboundedSender<RawPacket>> {
-        self.broadcast_senders.get(&session_id).cloned()
     }
 
     fn allocate_session_id(&mut self) -> LobbySessionId {
@@ -1031,8 +1071,10 @@ mod tests {
                 .iter()
                 .any(|recipient| recipient.session_id == second.session_id)
         );
+        let mut recipients = plan.recipients;
+        recipients.sort_by_key(|r| r.session_id);
         assert_eq!(
-            plan.recipients,
+            recipients,
             vec![
                 LobbyRecipient {
                     session_id: first.session_id,
@@ -1388,8 +1430,10 @@ mod tests {
                 .iter()
                 .any(|r| r.session_id == swinger.session_id)
         );
+        let mut recipients = plan.recipients;
+        recipients.sort_by_key(|r| r.session_id);
         assert_eq!(
-            plan.recipients,
+            recipients,
             vec![
                 LobbyRecipient {
                     session_id: old.session_id,
@@ -1435,9 +1479,9 @@ mod tests {
         // second player sees the solo in existing; solo is in recipients
         let second = state.insert(session(Uuid::from_u128(2), "second"));
         let plan = state.plan_join_visibility(second.session_id).unwrap();
-        assert_eq!(plan.new_session.session_id, second.session_id);
+        assert_eq!(plan.new_session.uuid, second.uuid);
         assert_eq!(plan.existing_sessions.len(), 1);
-        assert_eq!(plan.existing_sessions[0].session_id, solo.session_id);
+        assert_eq!(plan.existing_sessions[0].uuid, solo.uuid);
         assert_eq!(plan.existing_recipients[0].session_id, solo.session_id);
 
         // third player: newcomer excluded from existing_recipients
