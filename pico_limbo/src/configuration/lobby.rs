@@ -25,6 +25,7 @@ pub const DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT: &str =
 pub const DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE: &str =
     "<red>Private messages are only available in the lobby.</red>";
 
+
 /// A downstream server reachable via the Velocity proxy.
 /// `server` must match a key in Velocity's `[servers]` block.
 #[derive(Serialize, Deserialize)]
@@ -33,6 +34,30 @@ pub struct LobbyServerEntry {
     pub id: String,
     pub display_name: String,
     pub server: String,
+}
+
+/// Configuration for the per-player visibility toggle item in the hotbar.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct VisibilityToggleConfig {
+    /// Hotbar slot 0–8.
+    pub slot: u8,
+    /// Item identifier, e.g. `"minecraft:ender_eye"`.
+    pub item: String,
+    /// Optional `MiniMessage` display name when players are visible.
+    pub display_name_on: Option<String>,
+    /// Optional `MiniMessage` display name when players are hidden.
+    pub display_name_off: Option<String>,
+    /// Optional `MiniMessage` lore lines when players are visible.
+    #[serde(default)]
+    pub lore_on: Vec<String>,
+    /// Optional `MiniMessage` lore lines when players are hidden.
+    #[serde(default)]
+    pub lore_off: Vec<String>,
+    /// Optional `MiniMessage` feedback message sent when players become visible.
+    pub message_on: Option<String>,
+    /// Optional `MiniMessage` feedback message sent when players become hidden.
+    pub message_off: Option<String>,
 }
 
 /// Configuration for the hotbar selector item placed in the player's inventory.
@@ -127,6 +152,8 @@ pub struct LobbyConfig {
     pub servers: Vec<LobbyServerEntry>,
     /// Optional hotbar selector item.  Only active when `enabled = true`.
     pub selector: Option<SelectorItemConfig>,
+    /// Optional per-player visibility toggle item.  Only active when `enabled = true`.
+    pub visibility_toggle: Option<VisibilityToggleConfig>,
     /// Player-style NPCs that navigate to configured lobby servers.
     pub npcs: Vec<LobbyNpcConfig>,
     pub private_messages: PrivateMessagesConfig,
@@ -145,6 +172,16 @@ impl Default for LobbyConfig {
                 server: "survival".to_string(),
             }],
             selector: Some(SelectorItemConfig::default()),
+            visibility_toggle: Some(VisibilityToggleConfig {
+                slot: 8,
+                item: "minecraft:ender_eye".to_string(),
+                display_name_on: Some("<bold><green>Players Visible".to_string()),
+                display_name_off: Some("<bold><red>Players Hidden".to_string()),
+                lore_on: vec!["<gray>Right-click to hide other players.".to_string()],
+                lore_off: vec!["<gray>Right-click to show other players.".to_string()],
+                message_on: Some("<green>Other players are now visible.".to_string()),
+                message_off: Some("<red>Other players are now hidden.".to_string()),
+            }),
             npcs: vec![LobbyNpcConfig {
                 id: "survival-npc".to_string(),
                 destination: "survival".to_string(),

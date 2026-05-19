@@ -41,6 +41,7 @@ impl Default for ClientState {
             selected_hotbar_slot: 0,
             next_window_id: 1,
             open_selector: None,
+            players_visible: true,
         }
     }
 }
@@ -69,6 +70,7 @@ pub struct ClientState {
     selected_hotbar_slot: u8,
     next_window_id: u8,
     open_selector: Option<OpenSelectorState>,
+    players_visible: bool,
 }
 
 impl ClientState {
@@ -339,5 +341,18 @@ impl ClientState {
 
     pub const fn take_open_selector(&mut self) -> Option<OpenSelectorState> {
         self.open_selector.take()
+    }
+
+    // Player visibility toggle
+
+    #[allow(dead_code)]
+    pub const fn players_visible(&self) -> bool {
+        self.players_visible
+    }
+
+    /// Flips the visibility flag and returns the new value.
+    pub const fn toggle_players_visible(&mut self) -> bool {
+        self.players_visible = !self.players_visible;
+        self.players_visible
     }
 }

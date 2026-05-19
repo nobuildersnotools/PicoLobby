@@ -140,6 +140,11 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
         } else {
             None
         })?
+        .set_lobby_visibility_toggle(if lobby_enabled {
+            cfg.lobby.visibility_toggle
+        } else {
+            None
+        })?
         .show_online_player_count(cfg.server_list.show_online_player_count)
         .game_mode(cfg.default_game_mode.into())
         .hardcore(cfg.hardcore)

@@ -302,6 +302,7 @@ pub fn send_play_packets(
     }
 
     send_selector_item_packet(batch, client_state, server_state);
+    send_visibility_toggle_item_packet(batch, client_state, server_state);
 
     client_state.set_state(State::Play);
     client_state.set_keep_alive_should_enable();
@@ -486,6 +487,25 @@ fn send_selector_item_packet(
     };
     let version = client_state.protocol_version();
     let Some(packet) = selector.build_hotbar_packet(version) else {
+        return;
+    };
+    batch.queue(|| PacketRegistry::SetContainerSlot(packet));
+}
+
+fn send_visibility_toggle_item_packet(
+    batch: &mut Batch<PacketRegistry>,
+    client_state: &ClientState,
+    server_state: &ServerState,
+) {
+    if !server_state.lobby_enabled() {
+        return;
+    }
+    let Some(toggle) = server_state.lobby_visibility_toggle() else {
+        return;
+    };
+    let version = client_state.protocol_version();
+    // New players always start with players visible = true.
+    let Some(packet) = toggle.build_hotbar_packet(true, version) else {
         return;
     };
     batch.queue(|| PacketRegistry::SetContainerSlot(packet));

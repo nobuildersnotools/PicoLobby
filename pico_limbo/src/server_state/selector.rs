@@ -1,3 +1,4 @@
+use crate::configuration::lobby::VisibilityToggleConfig;
 use crate::server_state::navigation::LobbyDestination;
 use minecraft_packets::play::LobbySlot;
 use minecraft_packets::play::click_container_packet::ClickContainerPacket;
@@ -71,6 +72,90 @@ impl LobbySelector {
             return self.legacy_item_id;
         }
         PrecomputedRegistries::new(version).resolve_item_id(&self.item_identifier)
+    }
+}
+
+/// Per-player hotbar visibility toggle item.
+#[derive(Debug, Clone)]
+pub struct LobbyVisibilityToggle {
+    pub hotbar_slot: u8,
+    item_identifier: String,
+    display_name_on: Option<Component>,
+    display_name_off: Option<Component>,
+    lore_on: Vec<Component>,
+    lore_off: Vec<Component>,
+    pub message_on: Option<String>,
+    pub message_off: Option<String>,
+    legacy_item_id: Option<i32>,
+}
+
+impl LobbyVisibilityToggle {
+    /// Build and validate a `LobbyVisibilityToggle` from its config.
+    ///
+    /// # Errors
+    /// Returns an error if any `MiniMessage` string fails to parse.
+    pub fn new(config: VisibilityToggleConfig) -> Result<Self, MiniMessageError> {
+        let item_identifier = config.item;
+        let legacy_item_id = legacy_item_id_for(&item_identifier);
+
+        let display_name_on = config.display_name_on.as_deref().map(parse_mini_message).transpose()?;
+        let display_name_off = config.display_name_off.as_deref().map(parse_mini_message).transpose()?;
+        let lore_on = config
+            .lore_on
+            .iter()
+            .map(|s| parse_mini_message(s))
+            .collect::<Result<_, _>>()?;
+        let lore_off = config
+            .lore_off
+            .iter()
+            .map(|s| parse_mini_message(s))
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            hotbar_slot: config.slot.min(8),
+            item_identifier,
+            display_name_on,
+            display_name_off,
+            lore_on,
+            lore_off,
+            message_on: config.message_on,
+            message_off: config.message_off,
+            legacy_item_id,
+        })
+    }
+
+    /// Returns the protocol item ID for `version`, or `None` if unknown.
+    pub fn resolve_item_id(&self, version: ProtocolVersion) -> Option<i32> {
+        if version.is_before_inclusive(ProtocolVersion::V1_12_2) {
+            return self.legacy_item_id;
+        }
+        PrecomputedRegistries::new(version).resolve_item_id(&self.item_identifier)
+    }
+
+    /// Builds a `SetContainerSlotPacket` for the player's hotbar reflecting the
+    /// current visibility state.  Returns `None` if the item is unknown for that version.
+    pub fn build_hotbar_packet(
+        &self,
+        players_visible: bool,
+        version: ProtocolVersion,
+    ) -> Option<SetContainerSlotPacket> {
+        let item_id = self.resolve_item_id(version)?;
+        let (display_name, lore) = if players_visible {
+            (self.display_name_on.clone(), self.lore_on.clone())
+        } else {
+            (self.display_name_off.clone(), self.lore_off.clone())
+        };
+        let slot = LobbySlot::new(item_id, 1, display_name, lore);
+        Some(SetContainerSlotPacket::hotbar(self.hotbar_slot, slot))
+    }
+
+    /// Returns the feedback message for the given visibility state, if configured.
+    pub fn feedback_message(&self, players_visible: bool) -> Option<&str> {
+        if players_visible {
+            self.message_on.as_deref()
+        } else {
+            self.message_off.as_deref()
+        }
     }
 }
 
@@ -190,6 +275,10 @@ fn legacy_item_id_for(identifier: &str) -> Option<i32> {
         "minecraft:written_book" => 387,
         "minecraft:map" | "minecraft:filled_map" => 395,
         "minecraft:ender_pearl" => 368,
+        "minecraft:ender_eye" => 381,
+        "minecraft:glass" => 20,
+        "minecraft:slime_ball" => 341,
+        "minecraft:blaze_rod" => 369,
         "minecraft:diamond" => 264,
         "minecraft:emerald" => 388,
         "minecraft:gold_ingot" => 266,
@@ -334,6 +423,55 @@ mod tests {
             state.classify(&make_click(-999, 0, 0, 1), ProtocolVersion::V1_21),
             SelectorClick::Ignored
         ));
+    }
+
+    // ── LobbyVisibilityToggle tests ───────────────────────────────────────────
+
+    fn visibility_toggle_config(item: &str) -> VisibilityToggleConfig {
+        VisibilityToggleConfig {
+            slot: 8,
+            item: item.to_string(),
+            display_name_on: Some("<green>Visible".to_string()),
+            display_name_off: Some("<red>Hidden".to_string()),
+            lore_on: vec!["<gray>Click to hide.".to_string()],
+            lore_off: vec!["<gray>Click to show.".to_string()],
+            message_on: Some("<green>Now visible.".to_string()),
+            message_off: Some("<red>Now hidden.".to_string()),
+        }
+    }
+
+    #[test]
+    fn visibility_toggle_hotbar_packet_on_vs_off() {
+        let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:ender_eye"))
+            .expect("valid toggle");
+        let on = toggle.build_hotbar_packet(true, ProtocolVersion::V1_21);
+        let off = toggle.build_hotbar_packet(false, ProtocolVersion::V1_21);
+        assert!(on.is_some());
+        assert!(off.is_some());
+    }
+
+    #[test]
+    fn visibility_toggle_feedback_message_per_state() {
+        let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:ender_eye"))
+            .expect("valid toggle");
+        assert_eq!(toggle.feedback_message(true), Some("<green>Now visible."));
+        assert_eq!(toggle.feedback_message(false), Some("<red>Now hidden."));
+    }
+
+    #[test]
+    fn visibility_toggle_unknown_item_returns_none_packet() {
+        let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:unknown_xyz"))
+            .expect("valid toggle");
+        assert!(toggle.build_hotbar_packet(true, ProtocolVersion::V1_21).is_none());
+        assert!(toggle.build_hotbar_packet(false, ProtocolVersion::V1_21).is_none());
+    }
+
+    #[test]
+    fn visibility_toggle_ender_eye_legacy_id() {
+        let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:ender_eye"))
+            .expect("valid toggle");
+        assert_eq!(toggle.resolve_item_id(ProtocolVersion::V1_12_2), Some(381));
+        assert!(toggle.resolve_item_id(ProtocolVersion::V1_21).is_some());
     }
 
     #[test]

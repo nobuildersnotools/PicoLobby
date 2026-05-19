@@ -1,3 +1,4 @@
+use crate::handlers::play::visibility_toggle::handle_visibility_toggle;
 use crate::server::batch::Batch;
 use crate::server::client_state::ClientState;
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
@@ -33,6 +34,10 @@ impl PacketHandler for UseItemPacket {
             return Ok(Batch::new());
         }
 
+        if let Some(batch) = handle_visibility_toggle(client_state, server_state) {
+            return Ok(batch);
+        }
+
         Ok(open_selector_for_selected_slot(client_state, server_state))
     }
 }
@@ -43,6 +48,10 @@ impl PacketHandler for LegacyUseItemPacket {
         client_state: &mut ClientState,
         server_state: &ServerState,
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
+        if let Some(batch) = handle_visibility_toggle(client_state, server_state) {
+            return Ok(batch);
+        }
+
         Ok(open_selector_for_selected_slot(client_state, server_state))
     }
 }

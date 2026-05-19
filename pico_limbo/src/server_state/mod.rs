@@ -1,7 +1,9 @@
 use crate::configuration::antispam::AntispamConfig;
 use crate::configuration::boss_bar::EnabledBossBarConfig;
 use crate::configuration::commands::CommandsConfig;
-use crate::configuration::lobby::{LobbyNpcConfig, PrivateMessagesConfig, SelectorItemConfig};
+use crate::configuration::lobby::{
+    LobbyNpcConfig, PrivateMessagesConfig, SelectorItemConfig, VisibilityToggleConfig,
+};
 use crate::configuration::scoreboard::ScoreboardConfig;
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
@@ -20,7 +22,9 @@ pub use navigation::{LobbyDestination, NavigationError};
 use net::raw_packet::RawPacket;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
-pub use selector::{LobbySelector, OpenSelectorState, SelectorClick, build_selector_menu};
+pub use selector::{
+    LobbySelector, LobbyVisibilityToggle, OpenSelectorState, SelectorClick, build_selector_menu,
+};
 pub use server_commands::{ServerCommand, ServerCommands};
 use std::fs::File;
 use std::io::Read;
@@ -258,6 +262,7 @@ pub struct ServerState {
     lobby_leave_message: Option<String>,
     lobby_destinations: Vec<LobbyDestination>,
     lobby_selector: Option<LobbySelector>,
+    lobby_visibility_toggle: Option<LobbyVisibilityToggle>,
     lobby_state: Arc<Mutex<LobbyState>>,
     show_online_player_count: bool,
     game_mode: GameMode,
@@ -455,6 +460,10 @@ impl ServerState {
 
     pub const fn lobby_selector(&self) -> Option<&LobbySelector> {
         self.lobby_selector.as_ref()
+    }
+
+    pub const fn lobby_visibility_toggle(&self) -> Option<&LobbyVisibilityToggle> {
+        self.lobby_visibility_toggle.as_ref()
     }
 
     pub fn lobby_destinations(&self) -> &[LobbyDestination] {
@@ -727,6 +736,20 @@ impl ServerState {
         self.lobby_state().plan_join_visibility(session_id)
     }
 
+    /// Returns the join-visibility plan for the toggling player (existing sessions
+    /// are all other currently online players).  Used by the visibility toggle to
+    /// know which entities to spawn or despawn for just this client.
+    pub fn collect_sessions_for_visibility_toggle(
+        &self,
+        client_state: &crate::server::client_state::ClientState,
+    ) -> Option<LobbyJoinPlan> {
+        if !self.lobby_enabled {
+            return None;
+        }
+        let session_id = client_state.lobby_session_id()?;
+        self.lobby_state().plan_join_visibility(session_id)
+    }
+
     pub fn set_lobby_broadcast_sender(
         &self,
         session_id: LobbySessionId,
@@ -802,6 +825,7 @@ pub struct ServerStateBuilder {
     lobby_destinations: Vec<LobbyDestination>,
     lobby_npcs: Vec<LobbyNpc>,
     lobby_selector: Option<LobbySelector>,
+    lobby_visibility_toggle: Option<LobbyVisibilityToggle>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -856,6 +880,10 @@ pub enum ServerStateBuilderError {
     TryFromInt(#[from] TryFromIntError),
     #[error("scoreboard has {count} lines but the sidebar supports at most {max}")]
     TooManyScoreboardLines { count: usize, max: usize },
+    #[error(
+        "lobby selector and visibility toggle are configured on the same hotbar slot ({slot}); they must use different slots"
+    )]
+    VisibilityToggleSlotConflict { slot: u8 },
     #[error("scoreboard objective name '{0}' is longer than 16 characters")]
     InvalidScoreboardObjectiveName(String),
 }
@@ -976,6 +1004,19 @@ impl ServerStateBuilder {
             let selector =
                 LobbySelector::new(slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?;
             self.lobby_selector = Some(selector);
+        }
+        Ok(self)
+    }
+
+    /// Sets the hotbar visibility toggle item from config.  Parses `MiniMessage`
+    /// strings and pre-computes per-version item IDs.  Silently ignores `None`.
+    pub fn set_lobby_visibility_toggle(
+        &mut self,
+        config: Option<VisibilityToggleConfig>,
+    ) -> Result<&mut Self, ServerStateBuilderError> {
+        if let Some(cfg) = config {
+            let toggle = LobbyVisibilityToggle::new(cfg)?;
+            self.lobby_visibility_toggle = Some(toggle);
         }
         Ok(self)
     }
@@ -1229,6 +1270,15 @@ impl ServerStateBuilder {
             }
         }
 
+        if let (Some(selector), Some(toggle)) =
+            (&self.lobby_selector, &self.lobby_visibility_toggle)
+            && selector.hotbar_slot == toggle.hotbar_slot
+        {
+            return Err(ServerStateBuilderError::VisibilityToggleSlotConflict {
+                slot: selector.hotbar_slot,
+            });
+        }
+
         Ok(ServerState {
             forwarding_mode: self.forwarding_mode,
             spawn_dimension: self.dimension.unwrap_or_default(),
@@ -1247,6 +1297,7 @@ impl ServerStateBuilder {
             lobby_leave_message: optional_lifecycle_template(&self.lobby_leave_message)?,
             lobby_destinations: self.lobby_destinations,
             lobby_selector: self.lobby_selector,
+            lobby_visibility_toggle: self.lobby_visibility_toggle,
             lobby_state: Arc::new(Mutex::new(LobbyState::with_npcs(self.lobby_npcs))),
             show_online_player_count: self.show_online_player_count,
             game_mode: self.game_mode,
@@ -1514,6 +1565,58 @@ mod tests {
             result,
             Err(ServerStateBuilderError::MiniMessage(_))
         ));
+    }
+
+    fn visibility_toggle_config(slot: u8) -> crate::configuration::lobby::VisibilityToggleConfig {
+        crate::configuration::lobby::VisibilityToggleConfig {
+            slot,
+            item: "minecraft:ender_eye".to_string(),
+            display_name_on: None,
+            display_name_off: None,
+            lore_on: vec![],
+            lore_off: vec![],
+            message_on: None,
+            message_off: None,
+        }
+    }
+
+    #[test]
+    fn slot_conflict_between_selector_and_toggle_is_rejected() {
+        let mut builder = ServerState::builder();
+        builder
+            .set_lobby_enabled(true)
+            .set_lobby_selector(Some(SelectorItemConfig {
+                slot: 4,
+                item: "minecraft:compass".to_string(),
+                display_name: None,
+                lore: vec![],
+            }))
+            .unwrap()
+            .set_lobby_visibility_toggle(Some(visibility_toggle_config(4)))
+            .unwrap();
+
+        assert!(matches!(
+            builder.build(),
+            Err(ServerStateBuilderError::VisibilityToggleSlotConflict { slot: 4 })
+        ));
+    }
+
+    #[test]
+    fn distinct_slots_for_selector_and_toggle_are_accepted() {
+        let mut builder = ServerState::builder();
+        builder
+            .set_lobby_enabled(true)
+            .set_lobby_selector(Some(SelectorItemConfig {
+                slot: 4,
+                item: "minecraft:compass".to_string(),
+                display_name: None,
+                lore: vec![],
+            }))
+            .unwrap()
+            .set_lobby_visibility_toggle(Some(visibility_toggle_config(8)))
+            .unwrap();
+
+        assert!(builder.build().is_ok());
     }
 
     fn server_with_destinations(destinations: Vec<LobbyDestination>) -> ServerState {

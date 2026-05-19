@@ -53,6 +53,23 @@ impl<T: Send + 'static> Batch<T> {
             .push_back(Producer::Iterator(Box::new(iter.into_iter())));
     }
 
+    /// Drains all synchronous producers into a `Vec`.  Panics if any producer is
+    /// async (futures/iterators that haven't been resolved yet).  Only used in tests.
+    #[cfg(test)]
+    pub fn into_vec(self) -> Vec<T> {
+        let mut out = Vec::new();
+        for producer in self.producers {
+            match producer {
+                Producer::SyncClosure(f) => out.push(f()),
+                Producer::Iterator(iter) => out.extend(iter),
+                Producer::AsyncClosure(_) => {
+                    panic!("into_vec called on a Batch containing async producers")
+                }
+            }
+        }
+        out
+    }
+
     pub fn into_stream(self) -> BatchStream<T> {
         BatchStream {
             producers: self.producers,
