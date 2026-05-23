@@ -1,6 +1,7 @@
 use crate::handlers::play::fetch_minecraft_profile::fetch_minecraft_profile;
 use crate::handlers::play::send_chunks_circularly::CircularChunkPacketIterator;
 use crate::server::batch::Batch;
+use crate::server::chunk_packet_cache::ChunkPacketCacheKey;
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
@@ -39,6 +40,7 @@ use minecraft_packets::play::system_chat_message_packet::SystemChatMessagePacket
 use minecraft_packets::play::tab_list_packet::TabListPacket;
 use minecraft_packets::play::update_time_packet::UpdateTimePacket;
 use minecraft_protocol::prelude::{Dimension as ProtocolDimension, ProtocolVersion, State};
+use net::raw_packet::RawPacket;
 use pico_precomputed_registries::PrecomputedRegistries;
 use pico_registries::Identifier;
 use pico_registries::registry_provider::RegistryProvider;
@@ -46,6 +48,7 @@ use pico_registries::registry_provider::{Dimension as RegistryDimension, Dimensi
 use pico_structures::prelude::SchematicError;
 use pico_text_component::prelude::Component;
 use std::num::TryFromIntError;
+use std::sync::Arc;
 
 impl PacketHandler for AcknowledgeConfigurationPacket {
     fn handle(
@@ -130,7 +133,7 @@ fn world_position_to_chunk_position(
     Ok((chunk_x, chunk_z))
 }
 
-type PreparedChunkPackets = ((i32, i32), CircularChunkPacketIterator);
+type PreparedChunkPackets = ((i32, i32), Arc<[RawPacket]>);
 
 fn prepare_chunk_packets(
     protocol_version: ProtocolVersion,
@@ -148,17 +151,31 @@ fn prepare_chunk_packets(
         .get_dimension_info(to_registry_dimension(dimension))
         .unwrap_or_else(|_| legacy_dimension_info(dimension));
 
-    Ok(Some((
+    let biome_id = i32::try_from(biome_id)?;
+    let cache_key = ChunkPacketCacheKey::new(
+        protocol_version,
+        view_distance,
         center_chunk,
-        CircularChunkPacketIterator::new(
-            center_chunk,
-            view_distance,
-            server_state.world(),
-            i32::try_from(biome_id)?,
-            &dimension_info,
-            protocol_version,
-        ),
-    )))
+        dimension,
+        biome_id,
+        &dimension_info,
+    );
+    let world = server_state.world();
+    let cache = server_state.chunk_packet_cache();
+    let packets = cache
+        .get_or_encode(cache_key, protocol_version, || {
+            CircularChunkPacketIterator::new(
+                center_chunk,
+                view_distance,
+                world,
+                biome_id,
+                &dimension_info,
+                protocol_version,
+            )
+        })
+        .map_err(PacketHandlerError::Custom)?;
+
+    Ok(Some((center_chunk, packets)))
 }
 
 fn legacy_dimension_info(dimension: ProtocolDimension) -> DimensionInfo {
@@ -292,7 +309,7 @@ pub fn send_play_packets(
         send_boss_bar_packets(batch, server_state);
     }
 
-    if let Some((center_chunk, iter)) = chunk_packets {
+    if let Some((center_chunk, chunk_packets)) = chunk_packets {
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_20_3) {
             // Send Game Event
             let packet = GameEventPacket::start_waiting_for_chunks(0.0);
@@ -305,7 +322,7 @@ pub fn send_play_packets(
         }
 
         // Send Chunk Data and Update Light
-        batch.chain_iter(iter);
+        batch.chain_raw_packet_cache(chunk_packets);
     }
 
     send_selector_item_packet(batch, client_state, server_state);
@@ -838,6 +855,7 @@ pub fn send_message(
 mod tests {
     use super::*;
     use crate::configuration::scoreboard::{ScoreboardConfig, ScoreboardEnabledMode};
+    use crate::server::batch::OutboundPacket;
     use crate::server::game_profile::GameProfile;
     use futures::StreamExt;
     use minecraft_protocol::prelude::Uuid;
@@ -1029,52 +1047,52 @@ mod tests {
 
         // When
         send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
-        let mut batch = batch.into_stream();
+        let mut batch = batch.into_outbound_stream();
 
         // Then
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Login(_)
+            OutboundPacket::Registry(PacketRegistry::Login(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ClientBoundPlayerAbilities(_)
+            OutboundPacket::Registry(PacketRegistry::ClientBoundPlayerAbilities(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetDefaultSpawnPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SetDefaultSpawnPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SynchronizePlayerPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SynchronizePlayerPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Commands(_)
+            OutboundPacket::Registry(PacketRegistry::Commands(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SystemChatMessage(_)
+            OutboundPacket::Registry(PacketRegistry::SystemChatMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::UpdateTime(_)
+            OutboundPacket::Registry(PacketRegistry::UpdateTime(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetEntityMetadata(_)
+            OutboundPacket::Registry(PacketRegistry::SetEntityMetadata(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::GameEvent(_)
+            OutboundPacket::Registry(PacketRegistry::GameEvent(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetCenterChunk(_)
+            OutboundPacket::Registry(PacketRegistry::SetCenterChunk(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ChunkDataAndUpdateLight(_)
+            OutboundPacket::Raw(_)
         ));
         assert!(batch.next().await.is_none());
     }
@@ -1086,9 +1104,10 @@ mod tests {
         let mut batch = Batch::new();
 
         send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
-        let mut batch = batch.into_stream();
+        let mut batch = batch.into_outbound_stream();
 
-        let PacketRegistry::Login(packet) = batch.next().await.unwrap() else {
+        let OutboundPacket::Registry(PacketRegistry::Login(packet)) = batch.next().await.unwrap()
+        else {
             panic!("expected login packet");
         };
         assert_eq!(packet.entity_id(), 0);
@@ -1111,11 +1130,13 @@ mod tests {
         assert_eq!(second.entity_id(), 2);
         assert_eq!(server_state.online_players(), 2);
 
-        let PacketRegistry::Login(first_login) = first_batch.into_stream().next().await.unwrap()
+        let OutboundPacket::Registry(PacketRegistry::Login(first_login)) =
+            first_batch.into_outbound_stream().next().await.unwrap()
         else {
             panic!("expected first login packet");
         };
-        let PacketRegistry::Login(second_login) = second_batch.into_stream().next().await.unwrap()
+        let OutboundPacket::Registry(PacketRegistry::Login(second_login)) =
+            second_batch.into_outbound_stream().next().await.unwrap()
         else {
             panic!("expected second login packet");
         };
@@ -1139,56 +1160,56 @@ mod tests {
 
         // When
         send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
-        let mut batch = batch.into_stream();
+        let mut batch = batch.into_outbound_stream();
 
         // Then
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Login(_)
+            OutboundPacket::Registry(PacketRegistry::Login(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ServerData(_)
+            OutboundPacket::Registry(PacketRegistry::ServerData(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ClientBoundPlayerAbilities(_)
+            OutboundPacket::Registry(PacketRegistry::ClientBoundPlayerAbilities(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetDefaultSpawnPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SetDefaultSpawnPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SynchronizePlayerPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SynchronizePlayerPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Commands(_)
+            OutboundPacket::Registry(PacketRegistry::Commands(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::PlayClientBoundPluginMessage(_)
+            OutboundPacket::Registry(PacketRegistry::PlayClientBoundPluginMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SystemChatMessage(_)
+            OutboundPacket::Registry(PacketRegistry::SystemChatMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::UpdateTime(_)
+            OutboundPacket::Registry(PacketRegistry::UpdateTime(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetEntityMetadata(_)
+            OutboundPacket::Registry(PacketRegistry::SetEntityMetadata(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetCenterChunk(_)
+            OutboundPacket::Registry(PacketRegistry::SetCenterChunk(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ChunkDataAndUpdateLight(_)
+            OutboundPacket::Raw(_)
         ));
         assert!(batch.next().await.is_none());
     }
@@ -1202,44 +1223,44 @@ mod tests {
 
         // When
         send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
-        let mut batch = batch.into_stream();
+        let mut batch = batch.into_outbound_stream();
 
         // Then
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Login(_)
+            OutboundPacket::Registry(PacketRegistry::Login(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ClientBoundPlayerAbilities(_)
+            OutboundPacket::Registry(PacketRegistry::ClientBoundPlayerAbilities(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SynchronizePlayerPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SynchronizePlayerPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Commands(_)
+            OutboundPacket::Registry(PacketRegistry::Commands(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::PlayClientBoundPluginMessage(_)
+            OutboundPacket::Registry(PacketRegistry::PlayClientBoundPluginMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::LegacyChatMessage(_)
+            OutboundPacket::Registry(PacketRegistry::LegacyChatMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::UpdateTime(_)
+            OutboundPacket::Registry(PacketRegistry::UpdateTime(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetEntityMetadata(_)
+            OutboundPacket::Registry(PacketRegistry::SetEntityMetadata(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ChunkDataAndUpdateLight(_)
+            OutboundPacket::Raw(_)
         ));
         assert!(batch.next().await.is_none());
     }
@@ -1253,36 +1274,36 @@ mod tests {
 
         // When
         send_play_packets(&mut batch, &mut client_state, &server_state).unwrap();
-        let mut batch = batch.into_stream();
+        let mut batch = batch.into_outbound_stream();
 
         // Then
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::Login(_)
+            OutboundPacket::Registry(PacketRegistry::Login(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ClientBoundPlayerAbilities(_)
+            OutboundPacket::Registry(PacketRegistry::ClientBoundPlayerAbilities(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SynchronizePlayerPosition(_)
+            OutboundPacket::Registry(PacketRegistry::SynchronizePlayerPosition(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::LegacyChatMessage(_)
+            OutboundPacket::Registry(PacketRegistry::LegacyChatMessage(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::UpdateTime(_)
+            OutboundPacket::Registry(PacketRegistry::UpdateTime(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::SetEntityMetadata(_)
+            OutboundPacket::Registry(PacketRegistry::SetEntityMetadata(_))
         ));
         assert!(matches!(
             batch.next().await.unwrap(),
-            PacketRegistry::ChunkDataAndUpdateLight(_)
+            OutboundPacket::Raw(_)
         ));
         assert!(batch.next().await.is_none());
     }

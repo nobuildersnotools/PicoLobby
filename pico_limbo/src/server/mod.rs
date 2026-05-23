@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod chunk_packet_cache;
 mod client_data;
 pub mod client_state;
 mod controllable_interval;

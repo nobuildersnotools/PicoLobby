@@ -5,6 +5,7 @@ use crate::configuration::lobby::{
     LobbyNpcConfig, PrivateMessagesConfig, SelectorItemConfig, VisibilityToggleConfig,
 };
 use crate::configuration::scoreboard::ScoreboardConfig;
+use crate::server::chunk_packet_cache::ChunkPacketCache;
 use crate::server::client_state::ClientState;
 use crate::server::game_mode::GameMode;
 use base64::engine::general_purpose;
@@ -275,6 +276,7 @@ pub struct ServerState {
     spawn_rotation: (f32, f32),
     view_distance: i32,
     world: Option<Arc<World>>,
+    chunk_packet_cache: Arc<ChunkPacketCache>,
     boundaries: Option<Boundaries>,
     tab_list: Option<TabList>,
     fetch_player_skins: bool,
@@ -380,6 +382,10 @@ impl ServerState {
 
     pub fn world(&self) -> Option<Arc<World>> {
         self.world.clone()
+    }
+
+    pub fn chunk_packet_cache(&self) -> Arc<ChunkPacketCache> {
+        Arc::clone(&self.chunk_packet_cache)
     }
 
     pub const fn time_world_ticks(&self) -> i64 {
@@ -1373,6 +1379,7 @@ impl ServerStateBuilder {
             spawn_rotation: self.spawn_rotation,
             view_distance: self.view_distance,
             world,
+            chunk_packet_cache: Arc::new(ChunkPacketCache::default()),
             boundaries: self.boundaries,
             tab_list: self.tab_list,
             fetch_player_skins: self.fetch_player_skins,

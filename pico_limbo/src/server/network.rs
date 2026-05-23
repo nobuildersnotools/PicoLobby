@@ -1,4 +1,5 @@
 use crate::handlers::configuration::build_scoreboard_update_packets_from_rendered;
+use crate::server::batch::OutboundPacket;
 use crate::server::client_data::ClientData;
 use crate::server::lobby_chat::{
     chat_component_for_plan, chat_packet_for_version, lifecycle_message_component_for_plan,
@@ -205,8 +206,15 @@ async fn process_packet(
         info!("{} joined the game with entity id {}", username, entity_id);
     }
 
-    let mut stream = batch.into_stream();
+    let mut stream = batch.into_outbound_stream();
     while let Some(pending_packet) = stream.next().await {
+        let pending_packet = match pending_packet {
+            OutboundPacket::Registry(packet) => packet,
+            OutboundPacket::Raw(raw_packet) => {
+                client_data.write_packet(raw_packet).await?;
+                continue;
+            }
+        };
         let enable_compression = matches!(pending_packet, PacketRegistry::SetCompression(..));
         let raw_packet = pending_packet.encode_packet(protocol_version)?;
         client_data.write_packet(raw_packet).await?;
