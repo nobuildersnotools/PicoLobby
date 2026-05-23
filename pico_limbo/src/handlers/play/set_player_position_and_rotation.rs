@@ -52,9 +52,12 @@ pub fn teleport_player_to_spawn_out_of_bounds(
         && let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state)
     {
         client_state.set_pending_movement_plan(plan);
-    } else {
-        server_state.update_lobby_position(client_state);
     }
+    // When not broadcasting, session.position intentionally stays at the last-broadcast
+    // position. Movement packets to observers are relative deltas applied on top of
+    // the entity position the observer currently holds, so the delta base must match
+    // that last-broadcast position — not any intermediate un-broadcast position.
+    // client_state.position() is always updated above and is used for boundary checks.
 
     if let Some(Boundaries {
         teleport_message,
