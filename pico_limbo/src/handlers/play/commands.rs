@@ -52,6 +52,7 @@ fn handle_chat_message(
     batch: &mut Batch<PacketRegistry>,
 ) {
     if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        consume_chat_attempt_if_enabled(client_state, server_state);
         let version = client_state.protocol_version();
         batch.queue(move || chat_feedback_packet(version, "Chat message is too long."));
         return;
@@ -187,11 +188,13 @@ fn handle_private_message_command(
     let version = client_state.protocol_version();
     let message = message.trim();
     if message.is_empty() {
+        consume_chat_attempt_if_enabled(client_state, server_state);
         let feedback = settings.empty_message.clone();
         batch.queue(move || chat_feedback_packet(version, &feedback));
         return;
     }
     if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        consume_chat_attempt_if_enabled(client_state, server_state);
         let feedback = settings.too_long.clone();
         batch.queue(move || chat_feedback_packet(version, &feedback));
         return;
@@ -226,11 +229,13 @@ fn handle_reply_command(
     let version = client_state.protocol_version();
     let message = message.trim();
     if message.is_empty() {
+        consume_chat_attempt_if_enabled(client_state, server_state);
         let feedback = settings.empty_message.clone();
         batch.queue(move || chat_feedback_packet(version, &feedback));
         return;
     }
     if message.chars().count() > MAX_CHAT_MESSAGE_CHARS {
+        consume_chat_attempt_if_enabled(client_state, server_state);
         let feedback = settings.too_long.clone();
         batch.queue(move || chat_feedback_packet(version, &feedback));
         return;
@@ -277,6 +282,12 @@ fn queue_private_message_error(
     #[allow(clippy::literal_string_with_formatting_args)]
     let feedback = template.replace("{target}", &escape_minimessage_text(target));
     batch.queue(move || chat_feedback_packet(version, &feedback));
+}
+
+fn consume_chat_attempt_if_enabled(client_state: &mut ClientState, server_state: &ServerState) {
+    if server_state.chat_antispam().enabled {
+        client_state.consume_chat_rate_limit();
+    }
 }
 
 #[derive(Debug, Error)]

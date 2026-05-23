@@ -185,6 +185,10 @@ pub fn send_play_packets(
     client_state: &mut ClientState,
     server_state: &ServerState,
 ) -> Result<(), PacketHandlerError> {
+    if kick_if_lobby_full(client_state, server_state) {
+        return Ok(());
+    }
+
     let protocol_version = client_state.protocol_version();
     let view_distance = server_state.view_distance();
     let dimension = server_state.spawn_dimension();
@@ -222,7 +226,9 @@ pub fn send_play_packets(
         server_state,
     )?;
 
-    server_state.register_lobby_session(client_state);
+    if !register_lobby_session_for_play(client_state, server_state) {
+        return Ok(());
+    }
 
     let packet = login_packet.set_entity_id(client_state.entity_id());
     batch.queue(|| PacketRegistry::Login(Box::new(packet)));
@@ -305,10 +311,41 @@ pub fn send_play_packets(
     send_selector_item_packet(batch, client_state, server_state);
     send_visibility_toggle_item_packet(batch, client_state, server_state);
 
-    client_state.set_state(State::Play);
-    client_state.set_keep_alive_should_enable();
+    finish_play_state(client_state);
 
     Ok(())
+}
+
+fn finish_play_state(client_state: &mut ClientState) {
+    client_state.set_state(State::Play);
+    client_state.set_keep_alive_should_enable();
+}
+
+fn kick_if_lobby_full(client_state: &mut ClientState, server_state: &ServerState) -> bool {
+    if server_state.lobby_enabled()
+        && server_state.max_players() > 0
+        && server_state.online_players() >= server_state.max_players()
+    {
+        client_state.kick("The lobby is full.");
+        true
+    } else {
+        false
+    }
+}
+
+fn register_lobby_session_for_play(
+    client_state: &mut ClientState,
+    server_state: &ServerState,
+) -> bool {
+    if !server_state.lobby_enabled() {
+        return true;
+    }
+    if server_state.register_lobby_session(client_state).is_some() {
+        true
+    } else {
+        client_state.kick("The lobby is full.");
+        false
+    }
 }
 
 fn send_scoreboard_packets(

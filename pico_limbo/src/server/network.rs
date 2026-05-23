@@ -31,8 +31,11 @@ use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::time::{Duration, Interval};
 use tracing::{debug, error, info, trace, warn};
+
+const LOBBY_BROADCAST_QUEUE_CAPACITY: usize = 256;
 
 pub struct Server {
     state: Arc<RwLock<ServerState>>,
@@ -158,7 +161,7 @@ async fn process_packet(
     server_state: &Arc<RwLock<ServerState>>,
     raw_packet: RawPacket,
     was_in_play_state: &mut bool,
-    broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
+    broadcast_tx: &mpsc::Sender<RawPacket>,
 ) -> Result<(), PacketProcessingError> {
     let mut client_state = client_data.client().await;
     let protocol_version = client_state.protocol_version();
@@ -326,7 +329,7 @@ async fn send_join_visibility(
             for packet in batch.packets {
                 match packet.encode_packet(version) {
                     Ok(raw_packet) => {
-                        let _ = sender.send(raw_packet);
+                        queue_broadcast_packet(sender, raw_packet, "join visibility");
                         broadcast_count += 1;
                     }
                     Err(err) => {
@@ -371,7 +374,7 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
             for packet in batch.packets {
                 match packet.encode_packet(version) {
                     Ok(raw_packet) => {
-                        let _ = sender.send(raw_packet);
+                        queue_broadcast_packet(sender, raw_packet, "movement");
                     }
                     Err(err) => {
                         warn!(
@@ -404,7 +407,7 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
             for packet in batch.packets {
                 match packet.encode_packet(version) {
                     Ok(raw_packet) => {
-                        let _ = sender.send(raw_packet);
+                        queue_broadcast_packet(sender, raw_packet, "metadata");
                     }
                     Err(err) => {
                         warn!(
@@ -437,7 +440,7 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
             for packet in batch.packets {
                 match packet.encode_packet(version) {
                     Ok(raw_packet) => {
-                        let _ = sender.send(raw_packet);
+                        queue_broadcast_packet(sender, raw_packet, "swing");
                     }
                     Err(err) => {
                         warn!(
@@ -471,7 +474,7 @@ async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerSt
         if let Some(sender) = senders.get(&recipient.session_id) {
             match packet.encode_packet(recipient.protocol_version) {
                 Ok(raw_packet) => {
-                    let _ = sender.send(raw_packet);
+                    queue_broadcast_packet(sender, raw_packet, "chat");
                 }
                 Err(err) => {
                     warn!(
@@ -507,7 +510,7 @@ async fn broadcast_private_message(
         if let Some(sender) = senders.get(&recipient.session_id) {
             match packet.encode_packet(recipient.protocol_version) {
                 Ok(raw_packet) => {
-                    let _ = sender.send(raw_packet);
+                    queue_broadcast_packet(sender, raw_packet, "private message");
                 }
                 Err(err) => {
                     warn!(
@@ -541,7 +544,7 @@ fn broadcast_lifecycle_message_with_guard(
         if let Some(sender) = senders.get(&recipient.session_id) {
             match packet.encode_packet(recipient.protocol_version) {
                 Ok(raw_packet) => {
-                    let _ = sender.send(raw_packet);
+                    queue_broadcast_packet(sender, raw_packet, "lifecycle message");
                 }
                 Err(err) => {
                     warn!(
@@ -556,12 +559,24 @@ fn broadcast_lifecycle_message_with_guard(
     }
 }
 
+fn queue_broadcast_packet(sender: &mpsc::Sender<RawPacket>, raw_packet: RawPacket, context: &str) {
+    match sender.try_send(raw_packet) {
+        Ok(()) => {}
+        Err(TrySendError::Full(_)) => {
+            trace!("Dropped lobby {context} packet for a client with a full broadcast queue");
+        }
+        Err(TrySendError::Closed(_)) => {
+            trace!("Dropped lobby {context} packet for a closed broadcast queue");
+        }
+    }
+}
+
 async fn read(
     client_data: &ClientData,
     server_state: &Arc<RwLock<ServerState>>,
     was_in_play_state: &mut bool,
-    broadcast_tx: &mpsc::UnboundedSender<RawPacket>,
-    broadcast_rx: &mut mpsc::UnboundedReceiver<RawPacket>,
+    broadcast_tx: &mpsc::Sender<RawPacket>,
+    broadcast_rx: &mut mpsc::Receiver<RawPacket>,
     scoreboard_interval: &mut Option<Interval>,
     last_scoreboard_render: &mut Option<RenderedScoreboard>,
 ) -> Result<(), PacketProcessingError> {
@@ -666,7 +681,7 @@ async fn scoreboard_broadcast_task(server_state: Arc<RwLock<ServerState>>) {
                 for packet in packets {
                     match packet.encode_packet(snap.protocol_version) {
                         Ok(raw) => {
-                            let _ = sender.send(raw);
+                            queue_broadcast_packet(sender, raw, "scoreboard");
                         }
                         Err(err) => {
                             warn!(
@@ -738,7 +753,8 @@ async fn refresh_scoreboard(
 }
 
 async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>) {
-    let (broadcast_tx, mut broadcast_rx) = mpsc::unbounded_channel::<RawPacket>();
+    let (broadcast_tx, mut broadcast_rx) =
+        mpsc::channel::<RawPacket>(LOBBY_BROADCAST_QUEUE_CAPACITY);
     let client_data = ClientData::new(socket);
     let mut was_in_play_state = false;
     let mut scoreboard_interval = configured_scoreboard_interval(&server_state).await;
@@ -799,7 +815,11 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
                             for packet in batch.packets {
                                 match packet.encode_packet(version) {
                                     Ok(raw_packet) => {
-                                        let _ = sender.send(raw_packet);
+                                        queue_broadcast_packet(
+                                            sender,
+                                            raw_packet,
+                                            "leave visibility",
+                                        );
                                         sent += 1;
                                     }
                                     Err(err) => {

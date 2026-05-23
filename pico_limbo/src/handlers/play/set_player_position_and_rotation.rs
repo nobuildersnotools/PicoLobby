@@ -6,8 +6,12 @@ use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{Boundaries, ServerState};
 use minecraft_packets::play::set_player_position_and_rotation_packet::SetPlayerPositionAndRotationPacket;
 use minecraft_packets::play::synchronize_player_position_packet::SynchronizePlayerPositionPacket;
+use std::time::Duration;
 
 const FALL_SPEED: f64 = 3.8855;
+const MOVEMENT_BROADCAST_MIN_INTERVAL: Duration = Duration::from_millis(50);
+const MIN_POSITION_DELTA_SQUARED: f64 = 0.0001;
+const MIN_ROTATION_DELTA: f32 = 1.0;
 
 impl PacketHandler for SetPlayerPositionAndRotationPacket {
     fn handle(
@@ -32,12 +36,24 @@ pub fn teleport_player_to_spawn_out_of_bounds(
 ) -> Batch<PacketRegistry> {
     let mut batch = Batch::new();
     let previous_position = client_state.get_y_position();
+    let old_position = client_state.position();
+    let old_rotation = client_state.rotation();
     client_state.set_position(position);
     if let Some(rotation) = rotation {
         client_state.set_rotation(rotation);
     }
-    if let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state) {
+    if should_broadcast_movement(
+        old_position,
+        old_rotation,
+        position,
+        client_state.rotation(),
+        rotation.is_some(),
+    ) && client_state.check_movement_broadcast_rate_limit(MOVEMENT_BROADCAST_MIN_INTERVAL)
+        && let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state)
+    {
         client_state.set_pending_movement_plan(plan);
+    } else {
+        server_state.update_lobby_position(client_state);
     }
 
     if let Some(Boundaries {
@@ -60,6 +76,23 @@ pub fn teleport_player_to_spawn_out_of_bounds(
         }
     }
     batch
+}
+
+fn should_broadcast_movement(
+    old_position: (f64, f64, f64),
+    old_rotation: (f32, f32),
+    new_position: (f64, f64, f64),
+    new_rotation: (f32, f32),
+    includes_rotation: bool,
+) -> bool {
+    let dx = old_position.0 - new_position.0;
+    let dy = old_position.1 - new_position.1;
+    let dz = old_position.2 - new_position.2;
+    let moved = dx.mul_add(dx, dy.mul_add(dy, dz * dz)) >= MIN_POSITION_DELTA_SQUARED;
+    let rotated = includes_rotation
+        && ((old_rotation.0 - new_rotation.0).abs() >= MIN_ROTATION_DELTA
+            || (old_rotation.1 - new_rotation.1).abs() >= MIN_ROTATION_DELTA);
+    moved || rotated
 }
 
 pub fn teleport_player_to_spawn(

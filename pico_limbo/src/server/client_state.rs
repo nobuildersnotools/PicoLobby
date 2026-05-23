@@ -33,6 +33,8 @@ impl Default for ClientState {
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
             pending_lobby_swing_plan: None,
+            last_movement_broadcast_at: None,
+            last_swing_broadcast_at: None,
             position: (0.0, 0.0, 0.0),
             rotation: (0.0, 0.0),
             is_flight_allowed: false,
@@ -62,6 +64,8 @@ pub struct ClientState {
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
     pending_lobby_swing_plan: Option<LobbySwingPlan>,
+    last_movement_broadcast_at: Option<Instant>,
+    last_swing_broadcast_at: Option<Instant>,
     position: (f64, f64, f64),
     rotation: (f32, f32),
     is_flight_allowed: bool,
@@ -214,6 +218,10 @@ impl ClientState {
         true
     }
 
+    pub fn consume_chat_rate_limit(&mut self) {
+        self.last_chat_message_at = Some(Instant::now());
+    }
+
     pub fn set_pending_metadata_plan(&mut self, plan: LobbyMetadataPlan) {
         self.pending_lobby_metadata_plan = Some(plan);
     }
@@ -236,6 +244,28 @@ impl ClientState {
 
     pub const fn take_pending_swing_plan(&mut self) -> Option<LobbySwingPlan> {
         self.pending_lobby_swing_plan.take()
+    }
+
+    pub fn check_movement_broadcast_rate_limit(&mut self, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_movement_broadcast_at
+            && now.duration_since(last) < min_interval
+        {
+            return false;
+        }
+        self.last_movement_broadcast_at = Some(now);
+        true
+    }
+
+    pub fn check_swing_broadcast_rate_limit(&mut self, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_swing_broadcast_at
+            && now.duration_since(last) < min_interval
+        {
+            return false;
+        }
+        self.last_swing_broadcast_at = Some(now);
+        true
     }
 
     // Keep alive

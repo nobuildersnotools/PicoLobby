@@ -267,7 +267,7 @@ pub struct ServerState {
     lobby_selector: Option<LobbySelector>,
     lobby_visibility_toggle: Option<LobbyVisibilityToggle>,
     lobby_state: Arc<Mutex<LobbyState>>,
-    lobby_broadcast_senders: Arc<RwLock<HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>>>>,
+    lobby_broadcast_senders: Arc<RwLock<HashMap<LobbySessionId, mpsc::Sender<RawPacket>>>>,
     show_online_player_count: bool,
     game_mode: GameMode,
     hardcore: bool,
@@ -516,6 +516,9 @@ impl ServerState {
             client_state.clear_lobby_session_id();
             return None;
         }
+        if self.max_players > 0 && self.online_players() >= self.max_players {
+            return None;
+        }
 
         let (x, y, z) = client_state.position();
         let (yaw, pitch) = client_state.rotation();
@@ -759,7 +762,7 @@ impl ServerState {
     pub fn set_lobby_broadcast_sender(
         &self,
         session_id: LobbySessionId,
-        sender: mpsc::UnboundedSender<RawPacket>,
+        sender: mpsc::Sender<RawPacket>,
     ) {
         if !self.lobby_enabled {
             return;
@@ -790,7 +793,7 @@ impl ServerState {
     pub fn collect_lobby_broadcast_senders(
         &self,
         recipients: &[LobbyRecipient],
-    ) -> HashMap<LobbySessionId, mpsc::UnboundedSender<RawPacket>> {
+    ) -> HashMap<LobbySessionId, mpsc::Sender<RawPacket>> {
         if !self.lobby_enabled {
             return HashMap::new();
         }
