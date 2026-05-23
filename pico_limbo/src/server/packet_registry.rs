@@ -66,6 +66,7 @@ use minecraft_packets::play::set_default_spawn_position_packet::SetDefaultSpawnP
 use minecraft_packets::play::set_entity_data_packet::SetEntityMetadataPacket;
 use minecraft_packets::play::set_player_position_and_rotation_packet::SetPlayerPositionAndRotationPacket;
 use minecraft_packets::play::set_player_position_packet::SetPlayerPositionPacket;
+use minecraft_packets::play::set_player_rotation_packet::SetPlayerRotationPacket;
 use minecraft_packets::play::set_subtitle_text_packet::SetSubtitleTextPacket;
 use minecraft_packets::play::set_title_text_packet::SetTitleTextPacket;
 use minecraft_packets::play::set_titles_animation::SetTitlesAnimationPacket;
@@ -268,6 +269,13 @@ pub enum PacketRegistry {
         name = "minecraft:move_player_pos_rot"
     )]
     SetPlayerPositionAndRotation(SetPlayerPositionAndRotationPacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:move_player_rot"
+    )]
+    SetPlayerRotation(SetPlayerRotationPacket),
 
     #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:chat_command")]
     ChatCommand(ChatCommandPacket),
@@ -614,6 +622,7 @@ impl PacketHandler for PacketRegistry {
             }
             Self::SetPlayerPositionAndRotation(packet) => packet.handle(client_state, server_state),
             Self::SetPlayerPosition(packet) => packet.handle(client_state, server_state),
+            Self::SetPlayerRotation(packet) => packet.handle(client_state, server_state),
             Self::ChatCommand(packet) => packet.handle(client_state, server_state),
             Self::ChatMessage(packet) => packet.handle(client_state, server_state),
             Self::PlayClientInformation(packet) => packet.handle(client_state, server_state),
@@ -642,6 +651,32 @@ mod tests {
     use minecraft_packets::play::VoidChunkContext;
     use minecraft_protocol::prelude::{BinaryReader, DecodePacket, Uuid, VarInt};
     use pico_text_component::prelude::Component;
+
+    #[test]
+    fn decodes_set_player_rotation_packet_ids_across_versions() {
+        // yaw=90.0, pitch=0.0, on_ground=true
+        let data = &[0x42, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01][..];
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_7_2, 0x05u8),
+            (ProtocolVersion::V1_8, 0x05),
+            (ProtocolVersion::V1_9, 0x0e),
+            (ProtocolVersion::V1_12, 0x10),
+            (ProtocolVersion::V1_12_2, 0x0f),
+            (ProtocolVersion::V1_13, 0x12),
+            (ProtocolVersion::V1_19_4, 0x16),
+            (ProtocolVersion::V1_20, 0x16),
+            (ProtocolVersion::V1_20_5, 0x1c),
+            (ProtocolVersion::V1_21, 0x1c),
+            (ProtocolVersion::V26_1, 0x20),
+        ] {
+            let raw_packet = RawPacket::from_bytes(packet_id, data);
+            let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();
+            match packet {
+                PacketRegistry::SetPlayerRotation(_) => {}
+                _ => panic!("expected SetPlayerRotation for {version:?} id={packet_id:#04x}"),
+            }
+        }
+    }
 
     #[test]
     fn decodes_current_player_command_packet() {

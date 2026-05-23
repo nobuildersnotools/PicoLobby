@@ -524,6 +524,20 @@ fn serverbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
         // confirm_transaction (serverbound, legacy inventory acknowledgement)
         (4 | 47, "minecraft:legacy_confirm_transaction") => Some(0x0f),
         (107 | 110 | 210 | 315 | 335 | 338, "minecraft:legacy_confirm_transaction") => Some(0x05),
+        // move_player_rot (formerly "Player Look") is missing from generated reports before 1.21.
+        (4 | 47, "minecraft:move_player_rot") => Some(0x05),
+        (107 | 110 | 210 | 315, "minecraft:move_player_rot") => Some(0x0e),
+        (335, "minecraft:move_player_rot") => Some(0x10),
+        (338, "minecraft:move_player_rot") => Some(0x0f),
+        (393, "minecraft:move_player_rot") => Some(0x12),
+        (477 | 573, "minecraft:move_player_rot") => Some(0x13),
+        (735 | 751, "minecraft:move_player_rot") => Some(0x14),
+        (755 | 757, "minecraft:move_player_rot") => Some(0x13),
+        (759 | 761, "minecraft:move_player_rot") => Some(0x15),
+        (760 | 762 | 763, "minecraft:move_player_rot") => Some(0x16),
+        (764, "minecraft:move_player_rot") => Some(0x18),
+        (765, "minecraft:move_player_rot") => Some(0x19),
+        (766, "minecraft:move_player_rot") => Some(0x1c),
         // swing (formerly arm_animation) is missing from generated reports before 1.21.
         (4 | 47, "minecraft:swing") => Some(0x0a),
         (107 | 110, "minecraft:swing") => Some(0x1a),
