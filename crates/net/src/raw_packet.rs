@@ -2,11 +2,12 @@ use minecraft_protocol::prelude::{
     BinaryWriter, BinaryWriterError, EncodePacket, Identifiable, ProtocolVersion,
 };
 use std::fmt::Display;
+use std::sync::Arc;
 use thiserror::Error;
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct RawPacket {
-    data: Vec<u8>,
+    data: Arc<[u8]>,
 }
 
 #[derive(Error, Debug)]
@@ -24,14 +25,15 @@ impl RawPacket {
         if data.is_empty() {
             Err(RawPacketError::InvalidPacketLength)
         } else {
-            Ok(Self { data })
+            Ok(Self { data: data.into() })
         }
     }
 
     pub fn from_bytes(packet_id: u8, bytes: &[u8]) -> Self {
-        let mut data = vec![packet_id];
-        data.append(&mut bytes.to_vec());
-        Self { data }
+        let mut data = Vec::with_capacity(bytes.len() + 1);
+        data.push(packet_id);
+        data.extend_from_slice(bytes);
+        Self { data: data.into() }
     }
 
     /// Creates a new raw packet from a serializable packet struct.
@@ -48,10 +50,10 @@ impl RawPacket {
         packet.encode(&mut writer, ProtocolVersion::from(version_number))?;
 
         let data = writer.into_inner();
-        Ok(Self { data })
+        Ok(Self { data: data.into() })
     }
 
-    pub const fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.data.len()
     }
 

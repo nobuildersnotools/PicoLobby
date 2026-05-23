@@ -9,30 +9,12 @@ use pico_text_component::prelude::{Component, parse_mini_message};
 
 pub const MAX_CHAT_MESSAGE_CHARS: usize = 256;
 
-pub fn chat_packets_for_plan(plan: &LobbyChatPlan) -> Vec<(LobbyRecipient, PacketRegistry)> {
-    let component = format_lobby_chat(&plan.sender_username, &plan.message, &plan.format);
-    plan.recipients
-        .iter()
-        .cloned()
-        .map(|recipient| {
-            let packet = chat_packet_for_version(recipient.protocol_version, &component);
-            (recipient, packet)
-        })
-        .collect()
+pub fn chat_component_for_plan(plan: &LobbyChatPlan) -> Component {
+    format_lobby_chat(&plan.sender_username, &plan.message, &plan.format)
 }
 
-pub fn lifecycle_message_packets_for_plan(
-    plan: &LobbyLifecycleMessagePlan,
-) -> Vec<(LobbyRecipient, PacketRegistry)> {
-    let component = format_lobby_lifecycle_message(&plan.player_username, &plan.template);
-    plan.recipients
-        .iter()
-        .cloned()
-        .map(|recipient| {
-            let packet = chat_packet_for_version(recipient.protocol_version, &component);
-            (recipient, packet)
-        })
-        .collect()
+pub fn lifecycle_message_component_for_plan(plan: &LobbyLifecycleMessagePlan) -> Component {
+    format_lobby_lifecycle_message(&plan.player_username, &plan.template)
 }
 
 pub fn private_message_packets_for_plan(

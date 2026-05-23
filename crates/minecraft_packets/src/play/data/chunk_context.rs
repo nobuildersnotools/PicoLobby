@@ -15,5 +15,5 @@ pub struct VoidChunkContext {
 pub struct WorldContext {
     pub world: Arc<World>,
     pub paste_origin: Coordinates,
-    pub report_id_mapping: Arc<Vec<BlocksReportId>>,
+    pub report_id_mapping: Arc<[BlocksReportId]>,
 }

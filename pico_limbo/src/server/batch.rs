@@ -8,6 +8,7 @@ type AsyncClosure<T> =
     Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>> + Send + 'static>;
 
 enum Producer<T> {
+    Item(T),
     SyncClosure(Box<dyn FnOnce() -> T + Send + 'static>),
     AsyncClosure(AsyncClosure<T>),
     Iterator(Box<dyn Iterator<Item = T> + Send + 'static>),
@@ -22,6 +23,11 @@ impl<T: Send + 'static> Batch<T> {
         Self {
             producers: VecDeque::new(),
         }
+    }
+
+    /// Queues an already-built item without allocating a closure.
+    pub fn push_item(&mut self, item: T) {
+        self.producers.push_back(Producer::Item(item));
     }
 
     /// Queues a synchronous function or closure.
@@ -60,6 +66,7 @@ impl<T: Send + 'static> Batch<T> {
         let mut out = Vec::new();
         for producer in self.producers {
             match producer {
+                Producer::Item(item) => out.push(item),
                 Producer::SyncClosure(f) => out.push(f()),
                 Producer::Iterator(iter) => out.extend(iter),
                 Producer::AsyncClosure(_) => {
@@ -89,7 +96,7 @@ pub struct BatchStream<T> {
     current: Current<T>,
 }
 
-impl<T: Send + 'static> Stream for BatchStream<T> {
+impl<T: Send + Unpin + 'static> Stream for BatchStream<T> {
     type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -113,6 +120,9 @@ impl<T: Send + 'static> Stream for BatchStream<T> {
                     this.current = Current::Idle;
                 }
                 Current::Idle => match this.producers.pop_front() {
+                    Some(Producer::Item(item)) => {
+                        return Poll::Ready(Some(item));
+                    }
                     Some(Producer::SyncClosure(f)) => {
                         return Poll::Ready(Some(f()));
                     }

@@ -1,8 +1,10 @@
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{
-    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpc,
-    LobbyNpcKind, LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySpawnInfo, LobbySwingPlan,
+    EntityId, LobbyJoinPlan, LobbyLeavePlan, LobbyMetadataPlan, LobbyNpc, LobbyNpcKind,
+    LobbyNpcSpawnPlan, LobbyPosition, LobbyRecipient, LobbySpawnInfo,
 };
+#[cfg(test)]
+use crate::server_state::{LobbyMovementPlan, LobbySwingPlan};
 use minecraft_packets::play::animate_packet::AnimatePacket;
 use minecraft_packets::play::destroy_entities_packet::DestroyEntitiesPacket;
 use minecraft_packets::play::move_entity_packet::{
@@ -26,18 +28,21 @@ pub struct LobbyPacketBatch {
     pub packets: Vec<PacketRegistry>,
 }
 
+#[cfg(test)]
 pub struct LobbyMovementPacketBatch {
     #[allow(dead_code)]
     pub recipient: LobbyRecipient,
     pub packets: Vec<PacketRegistry>,
 }
 
+#[cfg(test)]
 pub struct LobbyMetadataPacketBatch {
     #[allow(dead_code)]
     pub recipient: LobbyRecipient,
     pub packets: Vec<PacketRegistry>,
 }
 
+#[cfg(test)]
 pub struct LobbySwingPacketBatch {
     #[allow(dead_code)]
     pub recipient: LobbyRecipient,
@@ -97,6 +102,7 @@ pub fn leave_visibility_packets(
     packets
 }
 
+#[cfg(test)]
 pub fn movement_visibility_batches(plan: &LobbyMovementPlan) -> Vec<LobbyMovementPacketBatch> {
     plan.recipients
         .iter()
@@ -120,6 +126,7 @@ pub fn movement_visibility_batches(plan: &LobbyMovementPlan) -> Vec<LobbyMovemen
         .collect()
 }
 
+#[cfg(test)]
 fn supports_movement_visibility(protocol_version: ProtocolVersion) -> bool {
     protocol_version.is_after_inclusive(ProtocolVersion::V1_7_2)
 }
@@ -201,6 +208,7 @@ pub fn movement_visibility_packets(
     packets
 }
 
+#[cfg(test)]
 pub fn metadata_visibility_batches(plan: &LobbyMetadataPlan) -> Vec<LobbyMetadataPacketBatch> {
     plan.recipients
         .iter()
@@ -230,6 +238,7 @@ pub fn metadata_visibility_packets(plan: &LobbyMetadataPlan) -> Vec<PacketRegist
     ))]
 }
 
+#[cfg(test)]
 pub fn swing_visibility_batches(plan: &LobbySwingPlan) -> Vec<LobbySwingPacketBatch> {
     plan.recipients
         .iter()

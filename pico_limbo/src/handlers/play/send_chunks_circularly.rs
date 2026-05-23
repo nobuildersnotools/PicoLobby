@@ -131,7 +131,7 @@ impl CircularChunkPacketIterator {
                 world.map(|world_arc| WorldContext {
                     paste_origin,
                     world: world_arc,
-                    report_id_mapping: Arc::new(report_id_mapping),
+                    report_id_mapping,
                 })
             });
 

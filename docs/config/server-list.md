@@ -5,7 +5,8 @@ Configure how your server appears in Minecraft's server list with these settings
 ## Max Players
 
 Maximum player count shown in server lists.
-This setting controls how many players your server claims to support in the server list. This is purely cosmetic and doesn't affect the actual player limit.
+This setting controls how many players your server claims to support in the server list.
+When `[lobby].enabled = true`, it also caps the number of players allowed in the lobby. Set `max_players = 0` to disable the lobby player limit.
 
 :::code-group
 ```toml [server.toml] {2}

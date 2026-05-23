@@ -57,7 +57,8 @@ teleport_message = "<red>You have reached the bottom of the world.</red>"
 
 [server_list]
 reply_to_status = true
-# Maximum count shown in your server list, does not affect the player limit
+# Maximum count shown in your server list.
+# When lobby mode is enabled, this also caps lobby players. Set to 0 to disable the limit.
 max_players = 20
 # MOTD displayed in server lists
 message_of_the_day = "A Minecraft Server"

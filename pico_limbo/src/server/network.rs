@@ -1,12 +1,13 @@
 use crate::handlers::configuration::build_scoreboard_update_packets_from_rendered;
 use crate::server::client_data::ClientData;
 use crate::server::lobby_chat::{
-    chat_packets_for_plan, lifecycle_message_packets_for_plan, private_message_packets_for_plan,
+    chat_component_for_plan, chat_packet_for_version, lifecycle_message_component_for_plan,
+    private_message_packets_for_plan,
 };
 use crate::server::lobby_visibility::{
     join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
-    leave_visibility_batches, metadata_visibility_batches, movement_visibility_batches,
-    npc_spawn_packets_for_join, swing_visibility_batches,
+    leave_visibility_batches, metadata_visibility_packets, movement_visibility_packets,
+    npc_spawn_packets_for_join, swing_visibility_packets,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
@@ -14,8 +15,8 @@ use crate::server::packet_registry::{
 };
 use crate::server::shutdown_signal::shutdown_signal;
 use crate::server_state::{
-    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPrivateMessagePlan, LobbySessionId,
-    LobbySwingPlan, RenderedScoreboard, ServerState,
+    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPrivateMessagePlan, LobbyRecipient,
+    LobbySessionId, LobbySwingPlan, RenderedScoreboard, ServerState,
 };
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
@@ -24,6 +25,7 @@ use minecraft_packets::play::disconnect_packet::DisconnectPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, State};
 use net::packet_stream::PacketStreamError;
 use net::raw_packet::RawPacket;
+use std::collections::HashMap;
 use std::future::pending;
 use std::num::TryFromIntError;
 use std::sync::Arc;
@@ -358,8 +360,7 @@ async fn send_join_visibility(
 }
 
 async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<ServerState>>) {
-    let batches = movement_visibility_batches(plan);
-    if batches.is_empty() {
+    if plan.recipients.is_empty() {
         return;
     }
 
@@ -367,32 +368,18 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
     let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
-    for batch in batches {
-        let session_id = batch.recipient.session_id;
-        let version = batch.recipient.protocol_version;
-        if let Some(sender) = senders.get(&session_id) {
-            for packet in batch.packets {
-                match packet.encode_packet(version) {
-                    Ok(raw_packet) => {
-                        queue_broadcast_packet(sender, raw_packet, "movement");
-                    }
-                    Err(err) => {
-                        warn!(
-                            "Failed to encode movement broadcast packet for session {:?} version {}: {}",
-                            session_id,
-                            version.humanize(),
-                            err
-                        );
-                    }
-                }
-            }
-        }
-    }
+    queue_version_bucketed_packets(&plan.recipients, &senders, "movement", |version| {
+        movement_visibility_packets(
+            version,
+            plan.moving_entity_id,
+            plan.previous_position,
+            plan.current_position,
+        )
+    });
 }
 
 async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<ServerState>>) {
-    let batches = metadata_visibility_batches(plan);
-    if batches.is_empty() {
+    if plan.recipients.is_empty() {
         return;
     }
 
@@ -400,32 +387,13 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
     let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
-    for batch in batches {
-        let session_id = batch.recipient.session_id;
-        let version = batch.recipient.protocol_version;
-        if let Some(sender) = senders.get(&session_id) {
-            for packet in batch.packets {
-                match packet.encode_packet(version) {
-                    Ok(raw_packet) => {
-                        queue_broadcast_packet(sender, raw_packet, "metadata");
-                    }
-                    Err(err) => {
-                        warn!(
-                            "Failed to encode metadata broadcast packet for session {:?} version {}: {}",
-                            session_id,
-                            version.humanize(),
-                            err
-                        );
-                    }
-                }
-            }
-        }
-    }
+    queue_version_bucketed_packets(&plan.recipients, &senders, "metadata", |_| {
+        metadata_visibility_packets(plan)
+    });
 }
 
 async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<ServerState>>) {
-    let batches = swing_visibility_batches(plan);
-    if batches.is_empty() {
+    if plan.recipients.is_empty() {
         return;
     }
 
@@ -433,60 +401,24 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
     let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
-    for batch in batches {
-        let session_id = batch.recipient.session_id;
-        let version = batch.recipient.protocol_version;
-        if let Some(sender) = senders.get(&session_id) {
-            for packet in batch.packets {
-                match packet.encode_packet(version) {
-                    Ok(raw_packet) => {
-                        queue_broadcast_packet(sender, raw_packet, "swing");
-                    }
-                    Err(err) => {
-                        warn!(
-                            "Failed to encode swing broadcast packet for session {:?} version {}: {}",
-                            session_id,
-                            version.humanize(),
-                            err
-                        );
-                    }
-                }
-            }
-        }
-    }
+    queue_version_bucketed_packets(&plan.recipients, &senders, "swing", |_| {
+        swing_visibility_packets(plan.swinging_entity_id)
+    });
 }
 
 async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerState>>) {
-    let packets = chat_packets_for_plan(plan);
-    if packets.is_empty() {
+    if plan.recipients.is_empty() {
         return;
     }
 
-    let recipients = packets
-        .iter()
-        .map(|(recipient, _)| recipient.clone())
-        .collect::<Vec<_>>();
     let server_state_guard = server_state.read().await;
-    let senders = server_state_guard.collect_lobby_broadcast_senders(&recipients);
+    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
     drop(server_state_guard);
 
-    for (recipient, packet) in packets {
-        if let Some(sender) = senders.get(&recipient.session_id) {
-            match packet.encode_packet(recipient.protocol_version) {
-                Ok(raw_packet) => {
-                    queue_broadcast_packet(sender, raw_packet, "chat");
-                }
-                Err(err) => {
-                    warn!(
-                        "Failed to encode chat packet for session {:?} version {}: {}",
-                        recipient.session_id,
-                        recipient.protocol_version.humanize(),
-                        err
-                    );
-                }
-            }
-        }
-    }
+    let component = chat_component_for_plan(plan);
+    queue_version_bucketed_packets(&plan.recipients, &senders, "chat", |version| {
+        vec![chat_packet_for_version(version, &component)]
+    });
 }
 
 async fn broadcast_private_message(
@@ -529,28 +461,48 @@ fn broadcast_lifecycle_message_with_guard(
     server_state: &ServerState,
     plan: &crate::server_state::LobbyLifecycleMessagePlan,
 ) {
-    let packets = lifecycle_message_packets_for_plan(plan);
-    if packets.is_empty() {
+    if plan.recipients.is_empty() {
         return;
     }
 
-    let recipients = packets
-        .iter()
-        .map(|(recipient, _)| recipient.clone())
-        .collect::<Vec<_>>();
-    let senders = server_state.collect_lobby_broadcast_senders(&recipients);
+    let senders = server_state.collect_lobby_broadcast_senders(&plan.recipients);
+    let component = lifecycle_message_component_for_plan(plan);
 
-    for (recipient, packet) in packets {
+    queue_version_bucketed_packets(&plan.recipients, &senders, "lifecycle message", |version| {
+        vec![chat_packet_for_version(version, &component)]
+    });
+}
+
+fn queue_version_bucketed_packets<F>(
+    recipients: &[LobbyRecipient],
+    senders: &HashMap<LobbySessionId, mpsc::Sender<RawPacket>>,
+    context: &str,
+    build_packets: F,
+) where
+    F: Fn(ProtocolVersion) -> Vec<PacketRegistry>,
+{
+    let mut buckets: HashMap<ProtocolVersion, Vec<&mpsc::Sender<RawPacket>>> = HashMap::new();
+    for recipient in recipients {
         if let Some(sender) = senders.get(&recipient.session_id) {
-            match packet.encode_packet(recipient.protocol_version) {
+            buckets
+                .entry(recipient.protocol_version)
+                .or_default()
+                .push(sender);
+        }
+    }
+
+    for (version, bucket_senders) in buckets {
+        for packet in build_packets(version) {
+            match packet.encode_packet(version) {
                 Ok(raw_packet) => {
-                    queue_broadcast_packet(sender, raw_packet, "lifecycle message");
+                    for sender in &bucket_senders {
+                        queue_broadcast_packet(sender, raw_packet.clone(), context);
+                    }
                 }
                 Err(err) => {
                     warn!(
-                        "Failed to encode lifecycle-message packet for session {:?} version {}: {}",
-                        recipient.session_id,
-                        recipient.protocol_version.humanize(),
+                        "Failed to encode {context} broadcast packet for version {}: {}",
+                        version.humanize(),
                         err
                     );
                 }

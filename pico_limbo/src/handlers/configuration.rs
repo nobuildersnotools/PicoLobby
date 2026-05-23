@@ -231,7 +231,7 @@ pub fn send_play_packets(
     }
 
     let packet = login_packet.set_entity_id(client_state.entity_id());
-    batch.queue(|| PacketRegistry::Login(Box::new(packet)));
+    batch.push_item(PacketRegistry::Login(Box::new(packet)));
 
     if protocol_version.between_inclusive(ProtocolVersion::V1_19, ProtocolVersion::V1_19_1) {
         let packet = ServerDataPacket::disable_secure_profile_enforcement();
