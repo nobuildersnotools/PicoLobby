@@ -216,7 +216,10 @@ impl Iterator for CircularChunkPacketIterator {
                 context,
                 self.protocol_version,
             ),
-            None => ChunkDataAndUpdateLightPacket::void(chunk_context),
+            None => ChunkDataAndUpdateLightPacket::void_for_protocol(
+                chunk_context,
+                self.protocol_version,
+            ),
         };
 
         if let Some(light_update_packet) = self.legacy_light_update_packet(chunk_context) {

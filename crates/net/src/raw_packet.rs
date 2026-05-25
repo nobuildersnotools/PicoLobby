@@ -36,6 +36,10 @@ impl RawPacket {
         Self { data: data.into() }
     }
 
+    pub fn from_packet_bytes(data: Vec<u8>) -> Self {
+        Self { data: data.into() }
+    }
+
     /// Creates a new raw packet from a serializable packet struct.
     pub fn from_packet<T>(
         packet_id: u8,

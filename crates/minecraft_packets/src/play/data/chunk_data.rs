@@ -338,6 +338,26 @@ fn encode_v1_8_sections(
     sections: &[ChunkSection],
     writer: &mut BinaryWriter,
 ) -> Result<(), BinaryWriterError> {
+    if sections
+        .iter()
+        .all(|section| is_single_block_section(section, 0))
+    {
+        const EMPTY_BLOCK_STATES: [u8; 8192] = [0; 8192];
+        const NO_BLOCK_LIGHT: [u8; 2048] = [0; 2048];
+        const FULL_SKY_LIGHT: [u8; 2048] = [0xFF; 2048];
+
+        for _ in sections {
+            writer.write_bytes(&EMPTY_BLOCK_STATES)?;
+        }
+        for _ in sections {
+            writer.write_bytes(&NO_BLOCK_LIGHT)?;
+        }
+        for _ in sections {
+            writer.write_bytes(&FULL_SKY_LIGHT)?;
+        }
+        return Ok(());
+    }
+
     let legacy_mapping = get_legacy_block_mapping();
     let mut block_lights = Vec::with_capacity(sections.len());
     let mut sky_lights = Vec::with_capacity(sections.len());
@@ -358,6 +378,13 @@ fn encode_v1_8_sections(
     }
 
     Ok(())
+}
+
+fn is_single_block_section(section: &ChunkSection, expected_id: i32) -> bool {
+    matches!(
+        &section.block_states,
+        PaletteContainer::SingleValued { value, .. } if value.inner() == expected_id
+    )
 }
 
 fn write_v1_8_block_state(writer: &mut BinaryWriter, state: u16) -> Result<(), BinaryWriterError> {

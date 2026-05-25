@@ -3,10 +3,13 @@ use minecraft_protocol::prelude::{Dimension, ProtocolVersion};
 use net::raw_packet::RawPacket;
 use pico_registries::registry_provider::DimensionInfo;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock, RwLock};
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChunkPacketCacheKey {
+    hash: u64,
     protocol_version: ProtocolVersion,
     view_distance: i32,
     center_chunk: (i32, i32),
@@ -27,18 +30,59 @@ impl ChunkPacketCacheKey {
         biome_id: i32,
         dimension_info: &DimensionInfo,
     ) -> Self {
-        Self {
+        let dimension = dimension.legacy_i8();
+        let dimension_registry_key = dimension_info.registry_key.to_string();
+        let hash = chunk_packet_cache_key_hash(
             protocol_version,
             view_distance,
             center_chunk,
-            dimension: dimension.legacy_i8(),
+            dimension,
+            biome_id,
+            dimension_info,
+            &dimension_registry_key,
+        );
+
+        Self {
+            hash,
+            protocol_version,
+            view_distance,
+            center_chunk,
+            dimension,
             biome_id,
             dimension_height: dimension_info.height,
             dimension_min_y: dimension_info.min_y,
             dimension_protocol_id: dimension_info.protocol_id,
-            dimension_registry_key: dimension_info.registry_key.to_string(),
+            dimension_registry_key,
         }
     }
+}
+
+impl Hash for ChunkPacketCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+fn chunk_packet_cache_key_hash(
+    protocol_version: ProtocolVersion,
+    view_distance: i32,
+    center_chunk: (i32, i32),
+    dimension: i8,
+    biome_id: i32,
+    dimension_info: &DimensionInfo,
+    dimension_registry_key: &str,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    protocol_version.hash(&mut hasher);
+    view_distance.hash(&mut hasher);
+    center_chunk.hash(&mut hasher);
+    dimension.hash(&mut hasher);
+    biome_id.hash(&mut hasher);
+    dimension_info.height.hash(&mut hasher);
+    dimension_info.min_y.hash(&mut hasher);
+    dimension_info.protocol_id.hash(&mut hasher);
+    dimension_registry_key.hash(&mut hasher);
+    hasher.finish()
 }
 
 type CachedChunkPackets = Arc<[RawPacket]>;
@@ -65,6 +109,23 @@ impl ChunkPacketCache {
             Ok(packets) => Ok(Arc::clone(packets)),
             Err(err) => Err(err.clone()),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_cached(
+        &self,
+        key: &ChunkPacketCacheKey,
+    ) -> Option<Result<CachedChunkPackets, String>> {
+        let cell = self
+            .packets
+            .read()
+            .ok()
+            .and_then(|cache| cache.get(key).cloned())?;
+
+        cell.get().map(|result| match result {
+            Ok(packets) => Ok(Arc::clone(packets)),
+            Err(err) => Err(err.clone()),
+        })
     }
 
     fn get_or_create_cell(&self, key: ChunkPacketCacheKey) -> Arc<CacheCell> {

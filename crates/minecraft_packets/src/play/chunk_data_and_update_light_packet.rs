@@ -83,6 +83,20 @@ impl EncodePacket for ChunkDataAndUpdateLightPacket {
 
 impl ChunkDataAndUpdateLightPacket {
     pub fn void(context: VoidChunkContext) -> Self {
+        Self::void_with_light_data(context, LightData::new_void(context.dimension_height))
+    }
+
+    pub fn void_for_protocol(context: VoidChunkContext, protocol_version: ProtocolVersion) -> Self {
+        let light_data = if protocol_version.is_after_inclusive(ProtocolVersion::V1_18) {
+            LightData::new_void(context.dimension_height)
+        } else {
+            LightData::default()
+        };
+
+        Self::void_with_light_data(context, light_data)
+    }
+
+    fn void_with_light_data(context: VoidChunkContext, light_data: LightData) -> Self {
         let dimension_height = context.dimension_height;
         let all_sections_bit_mask = (1i32 << (dimension_height / 16).min(16)) - 1;
         Self {
@@ -94,7 +108,7 @@ impl ChunkDataAndUpdateLightPacket {
             ignore_old_data: false,
             chunk_data: ChunkData::void(context),
             trust_edges: true,
-            v1_18_light_data: LightData::new_void(dimension_height),
+            v1_18_light_data: light_data,
         }
     }
 
@@ -107,18 +121,24 @@ impl ChunkDataAndUpdateLightPacket {
         let chunk_x = chunk_context.chunk_x;
         let chunk_z = chunk_context.chunk_z;
 
-        let light_data = match (
-            schematic_context
-                .world
-                .get_chunk_sky_light(chunk_x, chunk_z),
-            schematic_context
-                .world
-                .get_chunk_block_light(chunk_x, chunk_z),
-        ) {
-            (Some(sky_light), Some(block_light)) => {
-                LightData::from_light_data(sky_light, block_light, chunk_context.dimension_height)
+        let light_data = if protocol_version.is_after_inclusive(ProtocolVersion::V1_18) {
+            match (
+                schematic_context
+                    .world
+                    .get_chunk_sky_light(chunk_x, chunk_z),
+                schematic_context
+                    .world
+                    .get_chunk_block_light(chunk_x, chunk_z),
+            ) {
+                (Some(sky_light), Some(block_light)) => LightData::from_light_data(
+                    sky_light,
+                    block_light,
+                    chunk_context.dimension_height,
+                ),
+                _ => LightData::new_void(chunk_context.dimension_height),
             }
-            _ => LightData::new_void(chunk_context.dimension_height),
+        } else {
+            LightData::default()
         };
 
         Self {

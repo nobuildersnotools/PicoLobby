@@ -301,13 +301,13 @@ fn generate_encode_impl(
 
             quote! {
                 #enum_ident::#variant_ident(packet) => {
-                    packet.encode(&mut packet_writer, protocol_version)?;
-                    let packet_bytes = packet_writer.into_inner();
                     let packet_id: u8 = match packets_version {
                         #(#report_arms)*
                         _ => return Err(PacketRegistryEncodeError::UnsupportedPacket(protocol_version, String::from(#packet_name))),
                     };
-                    RawPacket::from_bytes(packet_id, &packet_bytes)
+                    packet_writer.write(&packet_id)?;
+                    packet.encode(&mut packet_writer, protocol_version)?;
+                    RawPacket::from_packet_bytes(packet_writer.into_inner())
                 }
             }
         });

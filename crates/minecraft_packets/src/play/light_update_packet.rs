@@ -107,23 +107,23 @@ impl LegacyLightData {
         let all_sections_mask = VarInt::new(Self::all_sections_mask(total_light_sections));
 
         let mut sky_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        sky_light_arrays.push(Self::full_sky_light());
+        sky_light_arrays.push(Light::full_sky());
         for section in sky_light_sections {
             sky_light_arrays.push(Light::new(section.clone()));
         }
-        sky_light_arrays.push(Self::full_sky_light());
+        sky_light_arrays.push(Light::full_sky());
         while sky_light_arrays.len() < total_light_sections as usize {
-            sky_light_arrays.push(Self::full_sky_light());
+            sky_light_arrays.push(Light::full_sky());
         }
 
         let mut block_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        block_light_arrays.push(Self::no_block_light());
+        block_light_arrays.push(Light::no_block());
         for section in block_light_sections {
             block_light_arrays.push(Light::new(section.clone()));
         }
-        block_light_arrays.push(Self::no_block_light());
+        block_light_arrays.push(Light::no_block());
         while block_light_arrays.len() < total_light_sections as usize {
-            block_light_arrays.push(Self::no_block_light());
+            block_light_arrays.push(Light::no_block());
         }
 
         Self {
@@ -146,11 +146,11 @@ impl LegacyLightData {
             empty_sky_light_mask: VarInt::default(),
             empty_block_light_mask: VarInt::default(),
             sky_light_arrays: LengthPaddedVec::new(vec![
-                Self::full_sky_light();
+                Light::full_sky();
                 total_light_sections as usize
             ]),
             block_light_arrays: LengthPaddedVec::new(vec![
-                Self::no_block_light();
+                Light::no_block();
                 total_light_sections as usize
             ]),
         }
@@ -162,14 +162,6 @@ impl LegacyLightData {
 
     fn all_sections_mask(total_light_sections: i32) -> i32 {
         (1i32 << total_light_sections) - 1
-    }
-
-    fn full_sky_light() -> Light {
-        Light::new(vec![0xFFu8 as i8; 2048])
-    }
-
-    fn no_block_light() -> Light {
-        Light::new(vec![0i8; 2048])
     }
 }
 

@@ -90,12 +90,15 @@ impl HotChunkCache {
     }
 
     pub fn get(&self) -> usize {
-        let packets = self
-            .cache
-            .get_or_encode(self.key.clone(), self.version, || {
-                chunk_iterator(self.version, self.view_distance)
-            })
-            .expect("read hot chunk cache");
+        let packets = match self.cache.get_cached(&self.key) {
+            Some(packets) => packets.expect("read hot chunk cache"),
+            None => self
+                .cache
+                .get_or_encode(self.key.clone(), self.version, || {
+                    chunk_iterator(self.version, self.view_distance)
+                })
+                .expect("read hot chunk cache"),
+        };
         cached_packet_bytes(&packets)
     }
 }
@@ -134,7 +137,7 @@ pub fn chunk_cache_hot(protocol: BenchProtocol, view_distance: i32) -> usize {
 pub async fn drain_mixed_batch() -> usize {
     let mut batch = Batch::new();
     batch.push_item(chat_packet("direct"));
-    batch.queue(|| movement_packet());
+    batch.queue(movement_packet);
     batch.queue_async(|| async { scoreboard_packet() });
     batch.chain_iter(vec![selector_slot_packet(), chunk_packet()]);
 

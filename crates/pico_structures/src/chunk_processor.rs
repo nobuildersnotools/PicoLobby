@@ -35,10 +35,10 @@ impl ChunkProcessor {
     }
 
     fn prepare_for_next_chunk(&mut self) {
-        self.palette.clear();
         for &id in &self.palette {
             self.id_to_palette_index[id as usize] = UNSEEN_ID_INDEX;
         }
+        self.palette.clear();
     }
 
     pub fn process_section(
