@@ -7,6 +7,9 @@ mod server;
 mod server_brand;
 mod server_state;
 
+#[cfg(feature = "bench_support")]
+pub mod bench_support;
+
 use crate::cli::Cli;
 use clap::Parser;
 use std::ffi::{CStr, c_char, c_int};

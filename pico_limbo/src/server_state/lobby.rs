@@ -496,11 +496,6 @@ impl LobbyState {
         self.sessions_by_uuid.get(uuid)
     }
 
-    pub fn update_position(&mut self, entity_id: EntityId, position: LobbyPosition) -> bool {
-        self.update_position_with_movement_plan(entity_id, position)
-            .is_some()
-    }
-
     pub fn update_position_with_movement_plan(
         &mut self,
         entity_id: EntityId,
@@ -1342,11 +1337,13 @@ mod tests {
         let recipient = state.insert(session(Uuid::from_u128(2), "recipient"));
         let new_position = LobbyPosition::new(5.0, 6.0, 7.0, 180.0, 12.0);
 
-        // simple update_position path
-        assert!(state.update_position(
-            moving.entity_id,
-            LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)
-        ));
+        // simple position update (discard the plan)
+        assert!(state
+            .update_position_with_movement_plan(
+                moving.entity_id,
+                LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)
+            )
+            .is_some());
 
         // full movement plan path
         let plan = state

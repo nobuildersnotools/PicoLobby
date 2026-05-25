@@ -6,11 +6,19 @@ edition = "2024"
 [lib]
 name = "pico_limbo_lib"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+bench_support = []
 
 [[bin]]
 name = "pico_limbo"
 path = "src/main.rs"
+
+[[bench]]
+name = "basic"
+harness = false
+required-features = ["bench_support"]
 
 [dependencies]
 blocks_report = { path = "../crates/blocks_report" }
@@ -41,3 +49,6 @@ toml = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+criterion = { version = "0.7", features = ["async_tokio", "html_reports"] }

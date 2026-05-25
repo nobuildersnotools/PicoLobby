@@ -570,19 +570,6 @@ impl ServerState {
             .remove_by_entity_id(EntityId::new(entity_id))
     }
 
-    pub fn update_lobby_position(&self, client_state: &ClientState) -> bool {
-        if !self.lobby_enabled {
-            return false;
-        }
-
-        let (x, y, z) = client_state.position();
-        let (yaw, pitch) = client_state.rotation();
-        self.lobby_state().update_position(
-            EntityId::new(client_state.entity_id()),
-            LobbyPosition::new(x, y, z, yaw, pitch),
-        )
-    }
-
     pub fn update_lobby_position_with_movement_plan(
         &self,
         client_state: &ClientState,

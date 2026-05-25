@@ -42,17 +42,6 @@ pub fn teleport_player_to_spawn_out_of_bounds(
     if let Some(rotation) = rotation {
         client_state.set_rotation(rotation);
     }
-    if should_broadcast_movement(
-        old_position,
-        old_rotation,
-        position,
-        client_state.rotation(),
-        rotation.is_some(),
-    ) && client_state.check_movement_broadcast_rate_limit(MOVEMENT_BROADCAST_MIN_INTERVAL)
-        && let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state)
-    {
-        client_state.set_pending_movement_plan(plan);
-    }
     // When not broadcasting, session.position intentionally stays at the last-broadcast
     // position. Movement packets to observers are relative deltas applied on top of
     // the entity position the observer currently holds, so the delta base must match
@@ -70,13 +59,35 @@ pub fn teleport_player_to_spawn_out_of_bounds(
             let difference = (previous_position - feet_y).abs();
 
             if previous_position >= f64::from(*min_y) && difference <= FALL_SPEED {
+                // The lobby position is still at the last-broadcast position (y_broadcast).
+                // teleport_player_to_spawn updates it to spawn via
+                // update_lobby_position_with_movement_plan, producing a plan from y_broadcast
+                // to spawn. Observers receive this and track the entity to spawn — they never
+                // see the below-min-y position.
                 teleport_player_to_spawn(client_state, server_state, &mut batch);
 
                 if let Some(content) = teleport_message {
                     send_message(&mut batch, content, client_state.protocol_version());
                 }
             }
+            // Whether or not the one-shot teleport fired, suppress the movement broadcast for
+            // all below-min-y packets. Latency packets that arrive after the teleport still
+            // report positions below min-y; broadcasting those would push observers below the
+            // world and corrupt the lobby position base used for future relative deltas.
+            return batch;
         }
+    }
+
+    if should_broadcast_movement(
+        old_position,
+        old_rotation,
+        position,
+        client_state.rotation(),
+        rotation.is_some(),
+    ) && client_state.check_movement_broadcast_rate_limit(MOVEMENT_BROADCAST_MIN_INTERVAL)
+        && let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state)
+    {
+        client_state.set_pending_movement_plan(plan);
     }
     batch
 }
@@ -110,7 +121,12 @@ pub fn teleport_player_to_spawn(
 
     client_state.set_position((x, y, z));
     client_state.set_rotation((yaw, pitch));
-    server_state.update_lobby_position(client_state);
+    // Use with_movement_plan so observers receive a movement/teleport packet to spawn.
+    // The plan's previous_position is the lobby's last-broadcast position (y_broadcast),
+    // which is what observers currently have, so the delta is applied correctly.
+    if let Some(plan) = server_state.update_lobby_position_with_movement_plan(client_state) {
+        client_state.set_pending_movement_plan(plan);
+    }
 }
 
 #[cfg(test)]
