@@ -49,7 +49,7 @@ impl RawPacket {
     where
         T: EncodePacket + Identifiable,
     {
-        let mut writer = BinaryWriter::new();
+        let mut writer = BinaryWriter::with_capacity(128);
         writer.write(&packet_id)?;
         packet.encode(&mut writer, ProtocolVersion::from(version_number))?;
 

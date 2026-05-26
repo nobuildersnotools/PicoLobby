@@ -1,6 +1,5 @@
 use futures::stream::Stream;
 use net::raw_packet::RawPacket;
-use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,19 +22,27 @@ pub enum OutboundPacket<T> {
 }
 
 pub struct Batch<T> {
-    producers: VecDeque<Producer<T>>,
+    producers: Vec<Producer<T>>,
 }
 
 impl<T: Send + 'static> Batch<T> {
     pub const fn new() -> Self {
         Self {
-            producers: VecDeque::new(),
+            producers: Vec::new(),
+        }
+    }
+
+    #[cfg(feature = "bench_support")]
+    #[allow(dead_code)]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            producers: Vec::with_capacity(capacity),
         }
     }
 
     /// Queues an already-built item without allocating a closure.
     pub fn push_item(&mut self, item: T) {
-        self.producers.push_back(Producer::Item(item));
+        self.producers.push(Producer::Item(item));
     }
 
     /// Queues a synchronous function or closure.
@@ -43,7 +50,7 @@ impl<T: Send + 'static> Batch<T> {
     where
         F: FnOnce() -> T + Send + 'static,
     {
-        self.producers.push_back(Producer::SyncClosure(Box::new(f)));
+        self.producers.push(Producer::SyncClosure(Box::new(f)));
     }
 
     /// Queues an async closure that may or may not produce a value.
@@ -54,7 +61,7 @@ impl<T: Send + 'static> Batch<T> {
     {
         let closure = move || -> Pin<Box<dyn Future<Output = T> + Send>> { Box::pin(f()) };
         self.producers
-            .push_back(Producer::AsyncClosure(Box::new(closure)));
+            .push(Producer::AsyncClosure(Box::new(closure)));
     }
 
     /// Chains a synchronous iterator.
@@ -64,13 +71,13 @@ impl<T: Send + 'static> Batch<T> {
         I::IntoIter: Send + 'static,
     {
         self.producers
-            .push_back(Producer::Iterator(Box::new(iter.into_iter())));
+            .push(Producer::Iterator(Box::new(iter.into_iter())));
     }
 
     /// Queues cached raw packets.  Each packet is cheap to clone because
     /// `RawPacket` stores its bytes behind an `Arc`.
     pub fn chain_raw_packet_cache(&mut self, packets: Arc<[RawPacket]>) {
-        self.producers.push_back(Producer::RawPacketCache(packets));
+        self.producers.push(Producer::RawPacketCache(packets));
     }
 
     /// Drains all synchronous producers into a `Vec`.  Panics if any producer is
@@ -103,7 +110,7 @@ impl<T: Send + 'static> Batch<T> {
 
     pub fn into_outbound_stream(self) -> BatchStream<T> {
         BatchStream {
-            producers: self.producers,
+            producers: self.producers.into_iter(),
             current: Current::Idle,
         }
     }
@@ -120,7 +127,7 @@ enum Current<T> {
 }
 
 pub struct BatchStream<T> {
-    producers: VecDeque<Producer<T>>,
+    producers: std::vec::IntoIter<Producer<T>>,
     current: Current<T>,
 }
 
@@ -176,7 +183,7 @@ impl<T: Send + Unpin + 'static> Stream for BatchStream<T> {
                     }
                     this.current = Current::Idle;
                 }
-                Current::Idle => match this.producers.pop_front() {
+                Current::Idle => match this.producers.next() {
                     Some(Producer::Item(item)) => {
                         return Poll::Ready(Some(OutboundPacket::Registry(item)));
                     }

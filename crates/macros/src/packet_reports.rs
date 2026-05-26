@@ -253,6 +253,14 @@ fn generate_decode_impl(
             state: State,
             raw_packet: RawPacket,
         ) -> Result<Self, PacketRegistryDecodeError> {
+            Self::decode_packet_ref(protocol_version, state, &raw_packet)
+        }
+
+        pub fn decode_packet_ref(
+            protocol_version: ProtocolVersion,
+            state: State,
+            raw_packet: &RawPacket,
+        ) -> Result<Self, PacketRegistryDecodeError> {
             match raw_packet.packet_id() {
                 Some(packet_id) => {
                     let packets_version = protocol_version.packets().version_number();
@@ -313,9 +321,9 @@ fn generate_encode_impl(
         });
 
     quote! {
-        pub fn encode_packet(self, protocol_version: ProtocolVersion) -> Result<RawPacket, PacketRegistryEncodeError> {
+        pub fn encode_packet(&self, protocol_version: ProtocolVersion) -> Result<RawPacket, PacketRegistryEncodeError> {
             let packets_version = protocol_version.packets().version_number();
-            let mut packet_writer = BinaryWriter::new();
+            let mut packet_writer = BinaryWriter::with_capacity(128);
             let raw_packet = match self {
                 #(#variant_arms)*
                 _ => return Err(PacketRegistryEncodeError::CannotBeEncoded),

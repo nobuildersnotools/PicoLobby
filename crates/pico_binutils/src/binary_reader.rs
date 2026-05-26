@@ -71,12 +71,9 @@ macro_rules! impl_read_int {
             impl ReadBytes for $t {
                 #[inline]
                 fn read(reader: &mut BinaryReader) -> Result<Self, BinaryReaderError> {
-                    let size = std::mem::size_of::<$t>();
-                    let mut bytes = vec![0u8; size];
+                    let mut bytes = [0u8; std::mem::size_of::<$t>()];
                     reader.0.read_exact(&mut bytes)?;
-                    let arr: [u8; std::mem::size_of::<$t>()] = bytes.try_into()
-                        .map_err(|_| BinaryReaderError::UnexpectedEof)?;
-                    let value = <$t>::from_be_bytes(arr);
+                    let value = <$t>::from_be_bytes(bytes);
                     Ok(value)
                 }
             }

@@ -25,7 +25,7 @@ use pico_nbt::{IndexMap, Value};
 use pico_registries::Identifier;
 use pico_registries::registry_provider::DimensionInfo;
 use pico_text_component::prelude::{Component, parse_mini_message};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 #[derive(Copy, Clone)]
 pub enum BenchProtocol {
@@ -135,43 +135,36 @@ pub fn chunk_cache_hot(protocol: BenchProtocol, view_distance: i32) -> usize {
 }
 
 pub async fn drain_mixed_batch() -> usize {
-    let mut batch = Batch::new();
+    let mut batch = Batch::with_capacity(4);
     batch.push_item(chat_packet("direct"));
     batch.queue(movement_packet);
     batch.queue_async(|| async { scoreboard_packet() });
-    batch.chain_iter(vec![selector_slot_packet(), chunk_packet()]);
+    batch.chain_iter([selector_slot_packet(), chunk_packet()]);
 
     drain_batch(batch).await
 }
 
 pub async fn drain_raw_cache_batch() -> usize {
-    let version = ProtocolVersion::V1_20_5;
-    let cache = ChunkPacketCache::default();
-    let packets = cache
-        .get_or_encode(chunk_cache_key(version, 2), version, || {
-            chunk_iterator(version, 2)
-        })
-        .expect("build raw packet cache");
-    let mut batch = Batch::new();
-    batch.chain_raw_packet_cache(packets);
+    let mut batch = Batch::with_capacity(1);
+    batch.chain_raw_packet_cache(Arc::clone(&RAW_CACHE_BATCH_PACKETS));
 
     drain_batch(batch).await
 }
 
 pub fn encode_representative_packets(protocol: BenchProtocol) -> usize {
     let version = protocol.version();
-    representative_packets(version)
-        .into_iter()
+    representative_packets(protocol)
+        .iter()
         .map(|packet| packet.encode_packet(version).expect("encode packet").size())
         .sum()
 }
 
 pub fn decode_representative_packets() -> usize {
     decode_fixtures()
-        .into_iter()
+        .iter()
         .map(|(version, raw_packet)| {
-            let packet =
-                PacketRegistry::decode_packet(version, State::Play, raw_packet).expect("decode");
+            let packet = PacketRegistry::decode_packet_ref(*version, State::Play, raw_packet)
+                .expect("decode");
             decoded_packet_weight(packet)
         })
         .sum()
@@ -258,17 +251,46 @@ async fn drain_batch(batch: Batch<PacketRegistry>) -> usize {
     let mut total = 0;
     while let Some(packet) = stream.next().await {
         total += match packet {
-            OutboundPacket::Registry(packet) => packet
-                .encode_packet(ProtocolVersion::V1_20_5)
-                .expect("encode batch packet")
-                .size(),
+            OutboundPacket::Registry(packet) => registry_packet_weight(&packet),
             OutboundPacket::Raw(packet) => packet.size(),
         };
     }
     total
 }
 
-fn representative_packets(version: ProtocolVersion) -> Vec<PacketRegistry> {
+fn registry_packet_weight(_packet: &PacketRegistry) -> usize {
+    1
+}
+
+static RAW_CACHE_BATCH_PACKETS: LazyLock<Arc<[RawPacket]>> = LazyLock::new(|| {
+    let version = ProtocolVersion::V1_20_5;
+    let cache = ChunkPacketCache::default();
+    cache
+        .get_or_encode(chunk_cache_key(version, 2), version, || {
+            chunk_iterator(version, 2)
+        })
+        .expect("build raw packet cache")
+});
+
+static REPRESENTATIVE_LEGACY_PACKETS: LazyLock<Vec<PacketRegistry>> =
+    LazyLock::new(|| build_representative_packets(ProtocolVersion::V1_8));
+static REPRESENTATIVE_LIGHT_PACKETS: LazyLock<Vec<PacketRegistry>> =
+    LazyLock::new(|| build_representative_packets(ProtocolVersion::V1_17));
+static REPRESENTATIVE_MODERN_PACKETS: LazyLock<Vec<PacketRegistry>> =
+    LazyLock::new(|| build_representative_packets(ProtocolVersion::V1_20_5));
+static REPRESENTATIVE_LATEST_PACKETS: LazyLock<Vec<PacketRegistry>> =
+    LazyLock::new(|| build_representative_packets(ProtocolVersion::V26_1));
+
+fn representative_packets(protocol: BenchProtocol) -> &'static [PacketRegistry] {
+    match protocol {
+        BenchProtocol::Legacy => &REPRESENTATIVE_LEGACY_PACKETS,
+        BenchProtocol::LightUpdate => &REPRESENTATIVE_LIGHT_PACKETS,
+        BenchProtocol::Modern => &REPRESENTATIVE_MODERN_PACKETS,
+        BenchProtocol::Latest => &REPRESENTATIVE_LATEST_PACKETS,
+    }
+}
+
+fn build_representative_packets(version: ProtocolVersion) -> Vec<PacketRegistry> {
     let component = component_fixture();
     let mut packets = vec![
         crate::server::lobby_chat::chat_packet_for_version(version, &component),
@@ -343,7 +365,7 @@ fn chunk_packet() -> PacketRegistry {
     ))
 }
 
-fn decode_fixtures() -> Vec<(ProtocolVersion, RawPacket)> {
+static DECODE_FIXTURES: LazyLock<Vec<(ProtocolVersion, RawPacket)>> = LazyLock::new(|| {
     vec![
         (
             ProtocolVersion::V1_20_5,
@@ -367,6 +389,10 @@ fn decode_fixtures() -> Vec<(ProtocolVersion, RawPacket)> {
             RawPacket::from_bytes(0x1c, &[0x42, 0xb4, 0, 0, 0, 0, 0, 0, 1]),
         ),
     ]
+});
+
+fn decode_fixtures() -> &'static [(ProtocolVersion, RawPacket)] {
+    &DECODE_FIXTURES
 }
 
 fn decoded_packet_weight(packet: PacketRegistry) -> usize {

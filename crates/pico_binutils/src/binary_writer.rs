@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::num::TryFromIntError;
 use thiserror::Error;
 
@@ -24,12 +23,17 @@ impl BinaryWriter {
         Self(Vec::new())
     }
 
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+
     pub fn write<T: WriteBytes + ?Sized>(&mut self, value: &T) -> Result<(), BinaryWriterError> {
         value.write(self)
     }
 
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<usize, BinaryWriterError> {
-        self.0.write(bytes).map_err(BinaryWriterError::from)
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
     }
 
     pub fn into_inner(self) -> Vec<u8> {
@@ -59,7 +63,7 @@ macro_rules! impl_write_int {
             impl WriteBytes for $t {
                 #[inline]
                 fn write(&self, writer: &mut BinaryWriter) -> Result<(), BinaryWriterError> {
-                    writer.0.write_all(&self.to_be_bytes())?;
+                    writer.0.extend_from_slice(&self.to_be_bytes());
                     Ok(())
                 }
             }
