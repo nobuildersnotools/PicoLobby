@@ -42,7 +42,44 @@ impl Component {
     }
 
     pub fn to_nbt(&self) -> Value {
-        pico_nbt::to_value(self).unwrap()
+        self.to_nbt_direct()
+    }
+
+    fn to_nbt_direct(&self) -> Value {
+        // Capacity: text + optional color + optional extra + optional formatting flags
+        let cap = 1
+            + usize::from(self.color.is_some())
+            + usize::from(!self.extra.is_empty())
+            + usize::from(self.bold)
+            + usize::from(self.italic)
+            + usize::from(self.underlined)
+            + usize::from(self.strikethrough)
+            + usize::from(self.obfuscated);
+        let mut map = pico_nbt::IndexMap::with_capacity(cap);
+        map.insert("text".to_string(), Value::String(self.text.clone()));
+        if let Some(color) = &self.color {
+            map.insert("color".to_string(), Value::String(color.clone()));
+        }
+        if self.bold {
+            map.insert("bold".to_string(), Value::Byte(1));
+        }
+        if self.italic {
+            map.insert("italic".to_string(), Value::Byte(1));
+        }
+        if self.underlined {
+            map.insert("underlined".to_string(), Value::Byte(1));
+        }
+        if self.strikethrough {
+            map.insert("strikethrough".to_string(), Value::Byte(1));
+        }
+        if self.obfuscated {
+            map.insert("obfuscated".to_string(), Value::Byte(1));
+        }
+        if !self.extra.is_empty() {
+            let list = self.extra.iter().map(Self::to_nbt_direct).collect();
+            map.insert("extra".to_string(), Value::List(list));
+        }
+        Value::Compound(map)
     }
 
     pub fn to_legacy(&self) -> String {
@@ -52,18 +89,24 @@ impl Component {
             text: String,
         }
         serde_json::to_string(&TextComponent {
-            text: self.to_legacy_impl(true),
+            text: self.to_legacy_text(),
         })
         .unwrap_or_default()
     }
 
     pub fn to_legacy_text(&self) -> String {
-        self.to_legacy_impl(true)
+        let cap = self.estimate_legacy_len();
+        let mut s = String::with_capacity(cap);
+        self.append_legacy_to(&mut s, true);
+        s
     }
 
-    fn to_legacy_impl(&self, is_root: bool) -> String {
-        let mut s = String::new();
+    fn estimate_legacy_len(&self) -> usize {
+        let self_len = self.text.len() + 4;
+        self.extra.iter().fold(self_len, |acc, e| acc + e.text.len() + 4)
+    }
 
+    fn append_legacy_to(&self, s: &mut String, is_root: bool) {
         if !is_root {
             s.push('§');
             s.push('r');
@@ -117,10 +160,8 @@ impl Component {
         s.push_str(&self.text);
 
         for extra in &self.extra {
-            s.push_str(&extra.to_legacy_impl(false));
+            extra.append_legacy_to(s, false);
         }
-
-        s
     }
 }
 

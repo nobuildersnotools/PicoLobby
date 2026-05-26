@@ -1,11 +1,9 @@
 use crate::prelude::Component;
-use quick_xml::Reader;
-use quick_xml::events::Event;
 use thiserror::Error;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Copy)]
 struct Style {
-    color: Option<String>,
+    color: Option<&'static str>,
     bold: bool,
     italic: bool,
     underlined: bool,
@@ -15,64 +13,99 @@ struct Style {
 
 #[derive(Debug, Error)]
 pub enum MiniMessageError {
-    #[error(transparent)]
-    QuickXml(#[from] quick_xml::Error),
-    #[error(transparent)]
-    Encoding(#[from] quick_xml::encoding::EncodingError),
     #[error("unknown MiniMessage tag '{0}'")]
     UnknownTag(String),
+    #[error("malformed MiniMessage input")]
+    Malformed,
 }
 
-fn is_styling_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "black"
-            | "dark_blue"
-            | "dark_green"
-            | "dark_aqua"
-            | "dark_red"
-            | "dark_purple"
-            | "gold"
-            | "gray"
-            | "dark_gray"
-            | "blue"
-            | "green"
-            | "aqua"
-            | "red"
-            | "light_purple"
-            | "yellow"
-            | "white"
-            | "bold"
-            | "b"
-            | "italic"
-            | "i"
-            | "em"
-            | "underlined"
-            | "u"
-            | "strikethrough"
-            | "st"
-            | "obfuscated"
-            | "obf"
-    )
-}
-
-fn expand_entity(name: &str) -> Option<&'static str> {
-    match name {
-        "lt" => Some("<"),
-        "gt" => Some(">"),
-        "amp" => Some("&"),
-        "apos" => Some("'"),
-        "quot" => Some("\""),
+fn tag_to_color(tag: &[u8]) -> Option<&'static str> {
+    match tag {
+        b"black" => Some("black"),
+        b"dark_blue" => Some("dark_blue"),
+        b"dark_green" => Some("dark_green"),
+        b"dark_aqua" => Some("dark_aqua"),
+        b"dark_red" => Some("dark_red"),
+        b"dark_purple" => Some("dark_purple"),
+        b"gold" => Some("gold"),
+        b"gray" => Some("gray"),
+        b"dark_gray" => Some("dark_gray"),
+        b"blue" => Some("blue"),
+        b"green" => Some("green"),
+        b"aqua" => Some("aqua"),
+        b"red" => Some("red"),
+        b"light_purple" => Some("light_purple"),
+        b"yellow" => Some("yellow"),
+        b"white" => Some("white"),
         _ => None,
     }
 }
 
-fn push_text(flat_components: &mut Vec<Component>, text: &str, style: &Style) {
+fn is_styling_tag(tag: &[u8]) -> bool {
+    matches!(
+        tag,
+        b"black"
+            | b"dark_blue"
+            | b"dark_green"
+            | b"dark_aqua"
+            | b"dark_red"
+            | b"dark_purple"
+            | b"gold"
+            | b"gray"
+            | b"dark_gray"
+            | b"blue"
+            | b"green"
+            | b"aqua"
+            | b"red"
+            | b"light_purple"
+            | b"yellow"
+            | b"white"
+            | b"bold"
+            | b"b"
+            | b"italic"
+            | b"i"
+            | b"em"
+            | b"underlined"
+            | b"u"
+            | b"strikethrough"
+            | b"st"
+            | b"obfuscated"
+            | b"obf"
+    )
+}
+
+fn apply_styling_tag(tag: &[u8], style: &mut Style) {
+    if let Some(color) = tag_to_color(tag) {
+        style.color = Some(color);
+        return;
+    }
+    match tag {
+        b"bold" | b"b" => style.bold = true,
+        b"italic" | b"i" | b"em" => style.italic = true,
+        b"underlined" | b"u" => style.underlined = true,
+        b"strikethrough" | b"st" => style.strikethrough = true,
+        b"obfuscated" | b"obf" => style.obfuscated = true,
+        _ => {}
+    }
+}
+
+fn expand_entity(name: &[u8]) -> Option<&'static str> {
+    match name {
+        b"lt" => Some("<"),
+        b"gt" => Some(">"),
+        b"amp" => Some("&"),
+        b"apos" => Some("'"),
+        b"quot" => Some("\""),
+        _ => None,
+    }
+}
+
+fn push_text(flat: &mut Vec<Component>, text: &str, style: Style) {
     if text.is_empty() {
         return;
     }
-    if let Some(last) = flat_components.last_mut()
-        && last.color == style.color
+    if let Some(last) = flat.last_mut()
+        && last.color.as_deref() == style.color
         && last.bold == style.bold
         && last.italic == style.italic
         && last.underlined == style.underlined
@@ -83,9 +116,9 @@ fn push_text(flat_components: &mut Vec<Component>, text: &str, style: &Style) {
         last.text.push_str(text);
         return;
     }
-    flat_components.push(Component {
+    flat.push(Component {
         text: text.to_string(),
-        color: style.color.clone(),
+        color: style.color.map(str::to_string),
         bold: style.bold,
         italic: style.italic,
         underlined: style.underlined,
@@ -96,89 +129,129 @@ fn push_text(flat_components: &mut Vec<Component>, text: &str, style: &Style) {
 }
 
 pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
-    let wrapped_input = format!("<root>{input}</root>");
-    let mut reader = Reader::from_str(&wrapped_input);
-    reader.config_mut().check_end_names = false;
-
-    let mut flat_components = Vec::new();
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut flat: Vec<Component> = Vec::new();
     let mut style_stack: Vec<Style> = vec![Style::default()];
+    let mut text_start = 0;
+    let mut pos = 0;
 
-    loop {
-        match reader.read_event()? {
-            Event::Start(e) => {
-                let tag_name = String::from_utf8(e.name().as_ref().to_vec()).unwrap_or_default();
+    macro_rules! flush_text {
+        ($end:expr) => {
+            let seg = &input[text_start..$end];
+            if !seg.is_empty() {
+                let style = *style_stack.last().unwrap();
+                push_text(&mut flat, seg, style);
+            }
+        };
+    }
 
-                if tag_name == "root" {
-                    continue;
-                } else if tag_name == "newline" {
-                    if let Some(current_style) = style_stack.last() {
-                        push_text(&mut flat_components, "\n", current_style);
-                    }
-                } else if is_styling_tag(&tag_name) {
-                    let mut new_style = style_stack.last().cloned().unwrap_or_default();
-                    match tag_name.as_str() {
-                        "black" | "dark_blue" | "dark_green" | "dark_aqua" | "dark_red"
-                        | "dark_purple" | "gold" | "gray" | "dark_gray" | "blue" | "green"
-                        | "aqua" | "red" | "light_purple" | "yellow" | "white" => {
-                            new_style.color = Some(tag_name);
-                        }
-                        "bold" | "b" => new_style.bold = true,
-                        "italic" | "i" | "em" => new_style.italic = true,
-                        "underlined" | "u" => new_style.underlined = true,
-                        "strikethrough" | "st" => new_style.strikethrough = true,
-                        "obfuscated" | "obf" => new_style.obfuscated = true,
-                        _ => {}
-                    }
-                    style_stack.push(new_style);
+    while pos < len {
+        match bytes[pos] {
+            b'<' => {
+                flush_text!(pos);
+                // Find the closing '>'
+                let Some(rel) = memchr_gt(&bytes[pos + 1..]) else {
+                    return Err(MiniMessageError::Malformed);
+                };
+                let close = pos + 1 + rel;
+                let tag_inner = &bytes[pos + 1..close];
+                pos = close + 1;
+                text_start = pos;
+
+                if tag_inner.is_empty() {
+                    return Err(MiniMessageError::Malformed);
+                }
+
+                let (is_closing, name_bytes) = if tag_inner[0] == b'/' {
+                    (true, &tag_inner[1..])
                 } else {
-                    return Err(MiniMessageError::UnknownTag(tag_name));
+                    (false, tag_inner)
+                };
+
+                let (is_self_closing, name_bytes) = if !is_closing && name_bytes.last() == Some(&b'/') {
+                    (true, &name_bytes[..name_bytes.len() - 1])
+                } else {
+                    (false, name_bytes)
+                };
+
+                if is_closing {
+                    if is_styling_tag(name_bytes) {
+                        if style_stack.len() > 1 {
+                            style_stack.pop();
+                        }
+                    } else if name_bytes != b"newline" {
+                        let tag = String::from_utf8_lossy(name_bytes).into_owned();
+                        return Err(MiniMessageError::UnknownTag(tag));
+                    }
+                } else if name_bytes == b"newline" {
+                    let style = *style_stack.last().unwrap();
+                    push_text(&mut flat, "\n", style);
+                } else if is_styling_tag(name_bytes) {
+                    if !is_self_closing {
+                        let mut new_style = *style_stack.last().unwrap();
+                        apply_styling_tag(name_bytes, &mut new_style);
+                        style_stack.push(new_style);
+                    }
+                } else {
+                    let tag = String::from_utf8_lossy(name_bytes).into_owned();
+                    return Err(MiniMessageError::UnknownTag(tag));
                 }
             }
-            Event::End(e) => {
-                let tag_name = String::from_utf8(e.name().as_ref().to_vec()).unwrap_or_default();
-                if tag_name == "root" {
+            b'&' => {
+                flush_text!(pos);
+                // Find the closing ';'
+                let Some(rel) = memchr_semi(&bytes[pos + 1..]) else {
+                    // No semicolon — emit literal '&' and continue
+                    let style = *style_stack.last().unwrap();
+                    push_text(&mut flat, "&", style);
+                    pos += 1;
+                    text_start = pos;
                     continue;
-                } else if is_styling_tag(&tag_name) && style_stack.len() > 1 {
-                    style_stack.pop();
-                } else if !is_styling_tag(&tag_name) && tag_name != "newline" {
-                    return Err(MiniMessageError::UnknownTag(tag_name));
+                };
+                let semi = pos + 1 + rel;
+                let entity_name = &bytes[pos + 1..semi];
+                pos = semi + 1;
+                text_start = semi + 1;
+
+                let style = *style_stack.last().unwrap();
+                if let Some(ch) = expand_entity(entity_name) {
+                    push_text(&mut flat, ch, style);
                 }
+                // Unknown entities are silently dropped (same as before)
             }
-            Event::Text(e) => {
-                let text = e.decode()?.to_string();
-                if let Some(current_style) = style_stack.last() {
-                    push_text(&mut flat_components, &text, current_style);
-                }
+            _ => {
+                pos += 1;
             }
-            Event::GeneralRef(e) => {
-                let name = std::str::from_utf8(e.as_ref()).unwrap_or("");
-                if let (Some(ch), Some(current_style)) = (expand_entity(name), style_stack.last()) {
-                    push_text(&mut flat_components, ch, current_style);
-                }
-            }
-            Event::Empty(e) => {
-                let tag_name = String::from_utf8(e.name().as_ref().to_vec()).unwrap_or_default();
-                if tag_name == "newline"
-                    && let Some(current_style) = style_stack.last()
-                {
-                    push_text(&mut flat_components, "\n", current_style);
-                } else if tag_name != "newline" {
-                    return Err(MiniMessageError::UnknownTag(tag_name));
-                }
-            }
-            Event::Eof => break,
-            _ => (),
         }
     }
 
-    if flat_components.is_empty() {
+    // Flush any remaining text
+    if text_start < len {
+        let style = *style_stack.last().unwrap();
+        push_text(&mut flat, &input[text_start..], style);
+    }
+
+    if flat.is_empty() {
         Ok(Component::default())
     } else {
         Ok(Component {
-            extra: flat_components,
+            extra: flat,
             ..Component::default()
         })
     }
+}
+
+/// Find the index of the first '>' byte in a slice.
+#[inline]
+fn memchr_gt(haystack: &[u8]) -> Option<usize> {
+    haystack.iter().position(|&b| b == b'>')
+}
+
+/// Find the index of the first ';' byte in a slice.
+#[inline]
+fn memchr_semi(haystack: &[u8]) -> Option<usize> {
+    haystack.iter().position(|&b| b == b';')
 }
 
 #[cfg(test)]
@@ -220,8 +293,6 @@ mod tests {
         let component = parse_mini_message(input).unwrap();
         let json_output = serde_json::to_string(&component).unwrap();
 
-        // Note: The order of fields in JSON is not guaranteed, but serde usually serializes in order.
-        // A more robust test would parse the JSON back and compare, but for this case, string comparison is fine.
         let expected_json = r#"{"text":"","extra":[{"text":"Hello,","color":"red","bold":true},{"text":" "},{"text":"world!","color":"blue"}]}"#;
 
         assert_eq!(json_output, expected_json);

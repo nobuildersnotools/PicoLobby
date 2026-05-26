@@ -1420,7 +1420,6 @@ version = "0.1.0"
 dependencies = [
  "minecraft_protocol",
  "pico_nbt",
- "quick-xml",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1513,15 +1512,6 @@ dependencies = [
  "quote",
  "syn",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "quick-xml"
-version = "0.39.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "958f21e8e7ceb5a1aa7fa87fab28e7c75976e0bfe7e23ff069e0a260f894067d"
-dependencies = [
- "memchr",
 ]
 
 [[package]]

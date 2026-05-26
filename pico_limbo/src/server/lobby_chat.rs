@@ -61,32 +61,30 @@ fn feedback_component(message: &str) -> Component {
 
 #[allow(clippy::literal_string_with_formatting_args)]
 fn format_lobby_chat(sender: &str, message: &str, format: &str) -> Component {
-    let template = format
-        .replace("{sender}", &escape_minimessage_text(sender))
-        .replace("{message}", &escape_minimessage_text(message));
+    let escaped_sender = escape_minimessage_text(sender);
+    let escaped_message = escape_minimessage_text(message);
+    let template = substitute_two(format, "{sender}", &escaped_sender, "{message}", &escaped_message);
     parse_mini_message(&template).unwrap_or_else(|_| Component::new(format!("{sender}: {message}")))
 }
 
 fn format_lobby_lifecycle_message(player: &str, template: &str) -> Component {
+    let escaped_player = escape_minimessage_text(player);
     #[allow(clippy::literal_string_with_formatting_args)]
-    let template = template.replace("{player}", &escape_minimessage_text(player));
-    parse_mini_message(&template).unwrap_or_else(|_| Component::new(player))
+    let expanded = substitute_one(template, "{player}", &escaped_player);
+    parse_mini_message(&expanded).unwrap_or_else(|_| Component::new(player))
 }
 
 #[allow(clippy::literal_string_with_formatting_args)]
 fn format_private_message_for_sender(plan: &LobbyPrivateMessagePlan) -> Component {
-    let template = plan
-        .sender_format
-        .replace("{sender}", &escape_minimessage_text(&plan.sender_username))
-        .replace(
-            "{recipient}",
-            &escape_minimessage_text(&plan.recipient_username),
-        )
-        .replace(
-            "{target}",
-            &escape_minimessage_text(&plan.recipient_username),
-        )
-        .replace("{message}", &escape_minimessage_text(&plan.message));
+    let escaped_sender = escape_minimessage_text(&plan.sender_username);
+    let escaped_recipient = escape_minimessage_text(&plan.recipient_username);
+    let escaped_message = escape_minimessage_text(&plan.message);
+    let template = substitute_pm(
+        &plan.sender_format,
+        &escaped_sender,
+        &escaped_recipient,
+        &escaped_message,
+    );
     parse_mini_message(&template).unwrap_or_else(|_| {
         Component::new(format!("To {}: {}", plan.recipient_username, plan.message))
     })
@@ -94,28 +92,105 @@ fn format_private_message_for_sender(plan: &LobbyPrivateMessagePlan) -> Componen
 
 #[allow(clippy::literal_string_with_formatting_args)]
 fn format_private_message_for_recipient(plan: &LobbyPrivateMessagePlan) -> Component {
-    let template = plan
-        .recipient_format
-        .replace("{sender}", &escape_minimessage_text(&plan.sender_username))
-        .replace(
-            "{recipient}",
-            &escape_minimessage_text(&plan.recipient_username),
-        )
-        .replace(
-            "{target}",
-            &escape_minimessage_text(&plan.recipient_username),
-        )
-        .replace("{message}", &escape_minimessage_text(&plan.message));
+    let escaped_sender = escape_minimessage_text(&plan.sender_username);
+    let escaped_recipient = escape_minimessage_text(&plan.recipient_username);
+    let escaped_message = escape_minimessage_text(&plan.message);
+    let template = substitute_pm(
+        &plan.recipient_format,
+        &escaped_sender,
+        &escaped_recipient,
+        &escaped_message,
+    );
     parse_mini_message(&template).unwrap_or_else(|_| {
         Component::new(format!("From {}: {}", plan.sender_username, plan.message))
     })
 }
 
-pub fn escape_minimessage_text(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+/// Single-pass substitution of one placeholder in a format string.
+fn substitute_one(format: &str, key: &str, value: &str) -> String {
+    format.find(key).map_or_else(
+        || format.to_string(),
+        |pos| {
+            let mut out = String::with_capacity(format.len() - key.len() + value.len());
+            out.push_str(&format[..pos]);
+            out.push_str(value);
+            out.push_str(&format[pos + key.len()..]);
+            out
+        },
+    )
+}
+
+/// Single-pass substitution of two placeholders in a format string (both must start with `{`).
+fn substitute_two(format: &str, key1: &str, val1: &str, key2: &str, val2: &str) -> String {
+    let mut out = String::with_capacity(format.len() + val1.len() + val2.len());
+    let mut rest = format;
+    while !rest.is_empty() {
+        if rest.starts_with(key1) {
+            out.push_str(val1);
+            rest = &rest[key1.len()..];
+        } else if rest.starts_with(key2) {
+            out.push_str(val2);
+            rest = &rest[key2.len()..];
+        } else {
+            let next = rest.find('{').unwrap_or(rest.len());
+            if next == 0 {
+                out.push('{');
+                rest = &rest[1..];
+            } else {
+                out.push_str(&rest[..next]);
+                rest = &rest[next..];
+            }
+        }
+    }
+    out
+}
+
+/// Single-pass substitution for private-message format strings with {sender}, {recipient}/{target}, {message}.
+#[allow(clippy::literal_string_with_formatting_args)]
+fn substitute_pm(format: &str, sender: &str, recipient: &str, message: &str) -> String {
+    let mut out = String::with_capacity(format.len() + sender.len() + recipient.len() + message.len());
+    let mut rest = format;
+    while !rest.is_empty() {
+        if rest.starts_with("{sender}") {
+            out.push_str(sender);
+            rest = &rest["{sender}".len()..];
+        } else if rest.starts_with("{recipient}") {
+            out.push_str(recipient);
+            rest = &rest["{recipient}".len()..];
+        } else if rest.starts_with("{target}") {
+            out.push_str(recipient);
+            rest = &rest["{target}".len()..];
+        } else if rest.starts_with("{message}") {
+            out.push_str(message);
+            rest = &rest["{message}".len()..];
+        } else {
+            let next = rest.find('{').unwrap_or(rest.len());
+            if next == 0 {
+                out.push('{');
+                rest = &rest[1..];
+            } else {
+                out.push_str(&rest[..next]);
+                rest = &rest[next..];
+            }
+        }
+    }
+    out
+}
+
+pub fn escape_minimessage_text(input: &str) -> std::borrow::Cow<'_, str> {
+    if !input.bytes().any(|b| matches!(b, b'&' | b'<' | b'>')) {
+        return std::borrow::Cow::Borrowed(input);
+    }
+    let mut out = String::with_capacity(input.len() + 8);
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    std::borrow::Cow::Owned(out)
 }
 
 #[cfg(test)]
