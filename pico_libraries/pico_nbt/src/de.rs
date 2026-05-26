@@ -55,22 +55,24 @@ impl<R: Read> NbtReader<R> {
         let len = self.reader.read_i32::<BigEndian>()?;
         let len =
             usize::try_from(len).map_err(|_| Error::Message("Invalid int array length".into()))?;
-        let mut list = Vec::with_capacity(len);
-        for _ in 0..len {
-            list.push(self.reader.read_i32::<BigEndian>()?);
-        }
-        Ok(list)
+        let mut buf = vec![0u8; len * 4];
+        self.reader.read_exact(&mut buf)?;
+        Ok(buf
+            .chunks_exact(4)
+            .map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+            .collect())
     }
 
     fn read_long_array(&mut self) -> Result<Vec<i64>> {
         let len = self.reader.read_i32::<BigEndian>()?;
         let len =
             usize::try_from(len).map_err(|_| Error::Message("Invalid long array length".into()))?;
-        let mut list = Vec::with_capacity(len);
-        for _ in 0..len {
-            list.push(self.reader.read_i64::<BigEndian>()?);
-        }
-        Ok(list)
+        let mut buf = vec![0u8; len * 8];
+        self.reader.read_exact(&mut buf)?;
+        Ok(buf
+            .chunks_exact(8)
+            .map(|c| i64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+            .collect())
     }
 
     fn read_value(&mut self, tag_id: u8) -> Result<Value> {

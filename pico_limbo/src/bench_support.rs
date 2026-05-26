@@ -194,27 +194,40 @@ pub fn component_legacy() -> usize {
     component_fixture().to_legacy_text().len()
 }
 
+// Pre-computed fixture data — initialized once, reused every bench iteration.
+static NBT_FIXTURE: LazyLock<Value> = LazyLock::new(nbt_fixture);
+static NBT_FIXTURE_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
+    let mut buf = Vec::with_capacity(NBT_ENCODE_CAP);
+    pico_nbt::to_writer_value(&mut buf, &NBT_FIXTURE, Some("root"))
+        .expect("encode nbt fixture");
+    buf
+});
+static DEFAULT_CONFIG_TOML: LazyLock<String> =
+    LazyLock::new(|| toml::to_string_pretty(&Config::default()).expect("serialize default config"));
+static LOBBY_HEAVY_CONFIG_TOML: LazyLock<String> = LazyLock::new(lobby_heavy_config_toml);
+
+// Generous capacity so the encoding Vec never reallocates (samples LongArray alone is ~516 bytes).
+const NBT_ENCODE_CAP: usize = 1024;
+
 pub fn nbt_to_bytes() -> usize {
-    pico_nbt::to_bytes(&nbt_fixture(), Some("root"))
-        .expect("encode nbt")
-        .len()
+    let mut buf = Vec::with_capacity(NBT_ENCODE_CAP);
+    pico_nbt::to_writer_value(&mut buf, &NBT_FIXTURE, Some("root")).expect("encode nbt");
+    buf.len()
 }
 
 pub fn nbt_from_slice() -> usize {
-    let bytes = pico_nbt::to_bytes(&nbt_fixture(), Some("root")).expect("encode nbt");
-    let (name, value) = pico_nbt::from_slice(&bytes).expect("decode nbt");
+    let (name, value) = pico_nbt::from_slice(&NBT_FIXTURE_BYTES).expect("decode nbt");
     name.len() + value.id() as usize
 }
 
 pub fn default_config_parse() -> usize {
-    let toml = toml::to_string_pretty(&Config::default()).expect("serialize default config");
-    let config: Config = toml::from_str(&toml).expect("parse default config");
+    let config: Config = toml::from_str(&DEFAULT_CONFIG_TOML).expect("parse default config");
     config.lobby.servers.len()
 }
 
 pub fn lobby_heavy_config_parse() -> usize {
-    let toml = lobby_heavy_config_toml();
-    let config: Config = toml::from_str(&toml).expect("parse lobby-heavy config");
+    let config: Config =
+        toml::from_str(&LOBBY_HEAVY_CONFIG_TOML).expect("parse lobby-heavy config");
     config.lobby.servers.len() + config.lobby.npcs.len()
 }
 

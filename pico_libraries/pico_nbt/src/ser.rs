@@ -106,17 +106,21 @@ impl<W: Write> NbtWriter<W> {
                 let len = i32::try_from(v.len())
                     .map_err(|_| crate::Error::Message("IntArray too large".into()))?;
                 self.writer.write_i32::<BigEndian>(len)?;
-                for &i in v {
-                    self.writer.write_i32::<BigEndian>(i)?;
+                let mut buf = vec![0u8; v.len() * 4];
+                for (chunk, &i) in buf.chunks_exact_mut(4).zip(v.iter()) {
+                    chunk.copy_from_slice(&i.to_be_bytes());
                 }
+                self.writer.write_all(&buf)?;
             }
             Value::LongArray(v) => {
                 let len = i32::try_from(v.len())
                     .map_err(|_| crate::Error::Message("LongArray too large".into()))?;
                 self.writer.write_i32::<BigEndian>(len)?;
-                for &l in v {
-                    self.writer.write_i64::<BigEndian>(l)?;
+                let mut buf = vec![0u8; v.len() * 8];
+                for (chunk, &l) in buf.chunks_exact_mut(8).zip(v.iter()) {
+                    chunk.copy_from_slice(&l.to_be_bytes());
                 }
+                self.writer.write_all(&buf)?;
             }
         }
         Ok(())
