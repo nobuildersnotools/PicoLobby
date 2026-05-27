@@ -23,6 +23,7 @@ pub mod light_update_packet;
 pub mod login_packet;
 pub mod move_entity_packet;
 pub mod open_screen_packet;
+pub mod player_action_packet;
 pub mod player_command_packet;
 pub mod player_info_remove_packet;
 pub mod player_info_update_packet;

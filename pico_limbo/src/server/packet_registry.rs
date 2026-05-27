@@ -46,6 +46,7 @@ use minecraft_packets::play::move_entity_packet::{
     MoveEntityPosPacket, MoveEntityPosRotPacket, MoveEntityRotPacket,
 };
 use minecraft_packets::play::open_screen_packet::OpenScreenPacket;
+use minecraft_packets::play::player_action_packet::PlayerActionPacket;
 use minecraft_packets::play::player_command_packet::PlayerCommandPacket;
 use minecraft_packets::play::player_info_remove_packet::PlayerInfoRemovePacket;
 use minecraft_packets::play::player_info_update_packet::PlayerInfoUpdatePacket;
@@ -575,6 +576,13 @@ pub enum PacketRegistry {
     )]
     ServerBoundConfirmTransaction(ConfirmTransactionPacket),
 
+    #[protocol_id(
+        state = "play",
+        bound = "serverbound",
+        name = "minecraft:player_action"
+    )]
+    PlayerAction(PlayerActionPacket),
+
     #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:interact")]
     Interact(InteractPacket),
 
@@ -637,6 +645,7 @@ impl PacketHandler for PacketRegistry {
             Self::ServerBoundConfirmTransaction(packet) => {
                 packet.handle(client_state, server_state)
             }
+            Self::PlayerAction(packet) => packet.handle(client_state, server_state),
             Self::Interact(packet) => packet.handle(client_state, server_state),
             Self::Attack(packet) => packet.handle(client_state, server_state),
             Self::Swing(packet) => packet.handle(client_state, server_state),
@@ -1601,6 +1610,39 @@ mod tests {
                     assert_eq!(p.window_id, 1, "{version:?}");
                 }
                 _ => panic!("expected ClickContainer for {version:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decodes_player_action_packet_ids_across_versions() {
+        for (version, packet_id) in [
+            (ProtocolVersion::V1_8, 0x07),
+            (ProtocolVersion::V1_9, 0x13),
+            (ProtocolVersion::V1_12_2, 0x14),
+            (ProtocolVersion::V1_13, 0x18),
+            (ProtocolVersion::V1_14, 0x1a),
+            (ProtocolVersion::V1_16, 0x1b),
+            (ProtocolVersion::V1_18, 0x1a),
+            (ProtocolVersion::V1_19, 0x1c),
+            (ProtocolVersion::V1_19_4, 0x1d),
+            (ProtocolVersion::V1_20_2, 0x20),
+            (ProtocolVersion::V1_20_3, 0x21),
+            (ProtocolVersion::V1_20_5, 0x24),
+            (ProtocolVersion::V1_21, 0x24),
+            (ProtocolVersion::V1_21_2, 0x26),
+            (ProtocolVersion::V1_21_4, 0x27),
+            (ProtocolVersion::V1_21_6, 0x28),
+            (ProtocolVersion::V26_1, 0x29),
+        ] {
+            let raw = RawPacket::from_bytes(packet_id, &[0x04]);
+            let pkt = PacketRegistry::decode_packet(version, State::Play, raw).unwrap();
+            match pkt {
+                PacketRegistry::PlayerAction(p) => {
+                    assert_eq!(p.status(), 4, "{version:?}");
+                    assert!(p.is_drop_selected_item(), "{version:?}");
+                }
+                _ => panic!("expected PlayerAction for {version:?}"),
             }
         }
     }

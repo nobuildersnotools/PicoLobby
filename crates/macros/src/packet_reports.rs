@@ -532,6 +532,22 @@ fn serverbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
         // confirm_transaction (serverbound, legacy inventory acknowledgement)
         (4 | 47, "minecraft:legacy_confirm_transaction") => Some(0x0f),
         (107 | 110 | 210 | 315 | 335 | 338, "minecraft:legacy_confirm_transaction") => Some(0x05),
+        // player_action (serverbound, formerly block_dig/player_digging)
+        (4 | 47, "minecraft:player_action") => Some(0x07),
+        (107 | 110 | 210 | 315, "minecraft:player_action") => Some(0x13),
+        (335 | 338, "minecraft:player_action") => Some(0x14),
+        (393, "minecraft:player_action") => Some(0x18),
+        (477 | 573 | 755 | 757, "minecraft:player_action") => Some(0x1a),
+        (735 | 751, "minecraft:player_action") => Some(0x1b),
+        (759 | 760 | 761, "minecraft:player_action") => Some(0x1c),
+        (762 | 763, "minecraft:player_action") => Some(0x1d),
+        (764, "minecraft:player_action") => Some(0x20),
+        (765, "minecraft:player_action") => Some(0x21),
+        (766 | 767, "minecraft:player_action") => Some(0x24),
+        (768, "minecraft:player_action") => Some(0x26),
+        (769 | 770, "minecraft:player_action") => Some(0x27),
+        (771..=774, "minecraft:player_action") => Some(0x28),
+        (775, "minecraft:player_action") => Some(0x29),
         // move_player_rot (formerly "Player Look") is missing from generated reports before 1.21.
         (4 | 47, "minecraft:move_player_rot") => Some(0x05),
         (107 | 110 | 210 | 315, "minecraft:move_player_rot") => Some(0x0e),

@@ -27,6 +27,14 @@ impl SetContainerSlotPacket {
         }
     }
 
+    /// Consumes this packet and returns the slot payload.
+    ///
+    /// This is useful when a caller needs to build a full inventory-content
+    /// resync from the same already-resolved item data.
+    pub fn into_slot_data(self) -> LobbySlot {
+        self.slot_data
+    }
+
     /// Container slot index for a hotbar slot 0–8 in the player inventory.
     const fn container_slot(hotbar_slot: u8) -> i16 {
         36 + hotbar_slot as i16
