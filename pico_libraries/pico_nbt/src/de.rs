@@ -55,24 +55,36 @@ impl<R: Read> NbtReader<R> {
         let len = self.reader.read_i32::<BigEndian>()?;
         let len =
             usize::try_from(len).map_err(|_| Error::Message("Invalid int array length".into()))?;
-        let mut buf = vec![0u8; len * 4];
+        let byte_len = len
+            .checked_mul(4)
+            .ok_or_else(|| Error::Message("Invalid int array length".into()))?;
+        let mut buf = vec![0u8; byte_len];
         self.reader.read_exact(&mut buf)?;
-        Ok(buf
-            .chunks_exact(4)
-            .map(|c| i32::from_be_bytes([c[0], c[1], c[2], c[3]]))
-            .collect())
+        buf.chunks_exact(4)
+            .map(|c| {
+                let bytes = <[u8; 4]>::try_from(c)
+                    .map_err(|_| Error::Message("Invalid int array chunk length".into()))?;
+                Ok(i32::from_be_bytes(bytes))
+            })
+            .collect()
     }
 
     fn read_long_array(&mut self) -> Result<Vec<i64>> {
         let len = self.reader.read_i32::<BigEndian>()?;
         let len =
             usize::try_from(len).map_err(|_| Error::Message("Invalid long array length".into()))?;
-        let mut buf = vec![0u8; len * 8];
+        let byte_len = len
+            .checked_mul(8)
+            .ok_or_else(|| Error::Message("Invalid long array length".into()))?;
+        let mut buf = vec![0u8; byte_len];
         self.reader.read_exact(&mut buf)?;
-        Ok(buf
-            .chunks_exact(8)
-            .map(|c| i64::from_be_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
-            .collect())
+        buf.chunks_exact(8)
+            .map(|c| {
+                let bytes = <[u8; 8]>::try_from(c)
+                    .map_err(|_| Error::Message("Invalid long array chunk length".into()))?;
+                Ok(i64::from_be_bytes(bytes))
+            })
+            .collect()
     }
 
     fn read_value(&mut self, tag_id: u8) -> Result<Value> {

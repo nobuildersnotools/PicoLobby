@@ -198,8 +198,7 @@ pub fn component_legacy() -> usize {
 static NBT_FIXTURE: LazyLock<Value> = LazyLock::new(nbt_fixture);
 static NBT_FIXTURE_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| {
     let mut buf = Vec::with_capacity(NBT_ENCODE_CAP);
-    pico_nbt::to_writer_value(&mut buf, &NBT_FIXTURE, Some("root"))
-        .expect("encode nbt fixture");
+    pico_nbt::to_writer_value(&mut buf, &NBT_FIXTURE, Some("root")).expect("encode nbt fixture");
     buf
 });
 static DEFAULT_CONFIG_TOML: LazyLock<String> =

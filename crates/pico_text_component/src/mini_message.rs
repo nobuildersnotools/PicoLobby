@@ -169,11 +169,12 @@ pub fn parse_mini_message(input: &str) -> Result<Component, MiniMessageError> {
                     (false, tag_inner)
                 };
 
-                let (is_self_closing, name_bytes) = if !is_closing && name_bytes.last() == Some(&b'/') {
-                    (true, &name_bytes[..name_bytes.len() - 1])
-                } else {
-                    (false, name_bytes)
-                };
+                let (is_self_closing, name_bytes) =
+                    if !is_closing && name_bytes.last() == Some(&b'/') {
+                        (true, &name_bytes[..name_bytes.len() - 1])
+                    } else {
+                        (false, name_bytes)
+                    };
 
                 if is_closing {
                     if is_styling_tag(name_bytes) {

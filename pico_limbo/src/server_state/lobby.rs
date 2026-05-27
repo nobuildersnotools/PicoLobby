@@ -1338,12 +1338,14 @@ mod tests {
         let new_position = LobbyPosition::new(5.0, 6.0, 7.0, 180.0, 12.0);
 
         // simple position update (discard the plan)
-        assert!(state
-            .update_position_with_movement_plan(
-                moving.entity_id,
-                LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)
-            )
-            .is_some());
+        assert!(
+            state
+                .update_position_with_movement_plan(
+                    moving.entity_id,
+                    LobbyPosition::new(0.0, 0.0, 0.0, 0.0, 0.0)
+                )
+                .is_some()
+        );
 
         // full movement plan path
         let plan = state

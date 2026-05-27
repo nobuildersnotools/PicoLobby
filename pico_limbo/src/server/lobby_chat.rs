@@ -63,7 +63,13 @@ fn feedback_component(message: &str) -> Component {
 fn format_lobby_chat(sender: &str, message: &str, format: &str) -> Component {
     let escaped_sender = escape_minimessage_text(sender);
     let escaped_message = escape_minimessage_text(message);
-    let template = substitute_two(format, "{sender}", &escaped_sender, "{message}", &escaped_message);
+    let template = substitute_two(
+        format,
+        "{sender}",
+        &escaped_sender,
+        "{message}",
+        &escaped_message,
+    );
     parse_mini_message(&template).unwrap_or_else(|_| Component::new(format!("{sender}: {message}")))
 }
 
@@ -148,7 +154,8 @@ fn substitute_two(format: &str, key1: &str, val1: &str, key2: &str, val2: &str) 
 /// Single-pass substitution for private-message format strings with {sender}, {recipient}/{target}, {message}.
 #[allow(clippy::literal_string_with_formatting_args)]
 fn substitute_pm(format: &str, sender: &str, recipient: &str, message: &str) -> String {
-    let mut out = String::with_capacity(format.len() + sender.len() + recipient.len() + message.len());
+    let mut out =
+        String::with_capacity(format.len() + sender.len() + recipient.len() + message.len());
     let mut rest = format;
     while !rest.is_empty() {
         if rest.starts_with("{sender}") {

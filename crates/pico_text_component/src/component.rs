@@ -103,7 +103,9 @@ impl Component {
 
     fn estimate_legacy_len(&self) -> usize {
         let self_len = self.text.len() + 4;
-        self.extra.iter().fold(self_len, |acc, e| acc + e.text.len() + 4)
+        self.extra
+            .iter()
+            .fold(self_len, |acc, e| acc + e.text.len() + 4)
     }
 
     fn append_legacy_to(&self, s: &mut String, is_root: bool) {
