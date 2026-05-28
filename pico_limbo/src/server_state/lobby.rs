@@ -155,6 +155,8 @@ pub struct LobbyNpc {
     pub entity_id: EntityId,
     pub position: LobbyPosition,
     pub kind: LobbyNpcKind,
+    /// Optional skin textures. When `None` the NPC renders with the default skin.
+    pub textures: Option<Property>,
 }
 
 impl LobbyNpc {
@@ -173,7 +175,14 @@ impl LobbyNpc {
             entity_id: EntityId::new(0),
             position,
             kind: LobbyNpcKind::Player,
+            textures: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_textures(mut self, textures: Option<Property>) -> Self {
+        self.textures = textures;
+        self
     }
 }
 
@@ -258,6 +267,12 @@ pub struct LobbySpawnInfo {
     pub entity_id: EntityId,
     pub position: LobbyPosition,
     pub crouching: bool,
+    /// Whether this player should appear in the recipient's tab list.
+    ///
+    /// Real players are listed; NPCs are not (on 1.19.3+ they are sent with the
+    /// "unlisted" flag so they stay out of the tab list while their player-list
+    /// entry persists, which is what lets the client load their skin).
+    pub listed: bool,
 }
 
 impl LobbySpawnInfo {
@@ -269,6 +284,7 @@ impl LobbySpawnInfo {
             entity_id: session.entity_id,
             position: session.position,
             crouching: session.crouching,
+            listed: true,
         }
     }
 }

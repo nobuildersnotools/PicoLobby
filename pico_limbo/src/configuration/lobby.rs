@@ -98,6 +98,29 @@ pub struct LobbyNpcConfig {
     pub yaw: f32,
     #[serde(default)]
     pub pitch: f32,
+    /// Optional skin applied to the NPC. When omitted the NPC renders with the
+    /// default Steve/Alex skin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skin: Option<NpcSkinConfig>,
+}
+
+/// How an NPC's skin is sourced.
+///
+/// `Texture` is tried first because it requires a `value` field, whereas
+/// `Player` requires a `player` field; the two variants are unambiguous.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum NpcSkinConfig {
+    /// Raw signed textures property (base64 `value` and optional `signature`),
+    /// applied directly without any network lookup.
+    Texture {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    /// Resolve the signed textures of an existing Minecraft account by player
+    /// name or UUID at startup via Mojang's session servers.
+    Player { player: String },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -192,6 +215,7 @@ impl Default for LobbyConfig {
                 z: 4.0,
                 yaw: 180.0,
                 pitch: 0.0,
+                skin: None,
             }],
             private_messages: PrivateMessagesConfig::default(),
             antispam: AntispamConfig::default(),
@@ -209,5 +233,54 @@ mod tests {
 
         assert_eq!(config.join_message, DEFAULT_JOIN_MESSAGE);
         assert_eq!(config.leave_message, DEFAULT_LEAVE_MESSAGE);
+    }
+
+    const NPC_BASE: &str =
+        "id = \"x\"\ndestination = \"d\"\nname = \"N\"\nx = 0.0\ny = 0.0\nz = 0.0\nyaw = 0.0\n";
+
+    fn parse_npc(extra: &str) -> Result<LobbyNpcConfig, toml::de::Error> {
+        toml::from_str(&format!("{NPC_BASE}{extra}"))
+    }
+
+    #[test]
+    fn npc_without_skin_defaults_to_none() {
+        let npc = parse_npc("").unwrap();
+        assert!(npc.skin.is_none());
+    }
+
+    #[test]
+    fn npc_skin_player_variant_parses() {
+        let npc = parse_npc("[skin]\nplayer = \"Notch\"\n").unwrap();
+        assert!(matches!(npc.skin, Some(NpcSkinConfig::Player { player }) if player == "Notch"));
+    }
+
+    #[test]
+    fn npc_skin_texture_variant_parses() {
+        let npc = parse_npc("[skin]\nvalue = \"abc\"\nsignature = \"sig\"\n").unwrap();
+        assert!(matches!(
+            npc.skin,
+            Some(NpcSkinConfig::Texture { value, signature })
+                if value == "abc" && signature.as_deref() == Some("sig")
+        ));
+    }
+
+    #[test]
+    fn npc_skin_texture_variant_allows_missing_signature() {
+        let npc = parse_npc("[skin]\nvalue = \"abc\"\n").unwrap();
+        assert!(matches!(
+            npc.skin,
+            Some(NpcSkinConfig::Texture { value, signature })
+                if value == "abc" && signature.is_none()
+        ));
+    }
+
+    #[test]
+    fn npc_skin_without_recognised_fields_is_rejected() {
+        assert!(parse_npc("[skin]\nnope = \"x\"\n").is_err());
+    }
+
+    #[test]
+    fn npc_unknown_top_level_field_is_rejected() {
+        assert!(parse_npc("bogus = true\n").is_err());
     }
 }

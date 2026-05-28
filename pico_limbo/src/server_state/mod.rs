@@ -17,6 +17,7 @@ pub use lobby::{
     LobbyPrivateMessageError, LobbyPrivateMessagePlan, LobbyRecipient, LobbySession,
     LobbySessionId, LobbySpawnInfo, LobbyState, LobbySwingPlan, ScoreboardSessionSnapshot,
 };
+use minecraft_packets::login::Property;
 use minecraft_packets::play::boss_bar_packet::{BossBarColor, BossBarDivision};
 use minecraft_protocol::prelude::{BinaryReaderError, Dimension, ProtocolVersion};
 pub use navigation::{LobbyDestination, NavigationError};
@@ -1092,16 +1093,19 @@ impl ServerStateBuilder {
     pub fn set_lobby_npcs(
         &mut self,
         configs: Vec<LobbyNpcConfig>,
+        mut skins: HashMap<String, Option<Property>>,
     ) -> Result<&mut Self, ServerStateBuilderError> {
         let npcs = configs
             .into_iter()
             .map(|cfg| {
+                let textures = skins.remove(&cfg.id).flatten();
                 LobbyNpc::player(
                     cfg.id,
                     cfg.destination,
                     cfg.name,
                     LobbyPosition::new(cfg.x, cfg.y, cfg.z, cfg.yaw, cfg.pitch),
                 )
+                .with_textures(textures)
             })
             .collect::<Vec<_>>();
         LobbyState::validate_npcs(&npcs)?;
@@ -1837,16 +1841,20 @@ mod tests {
             )])
             .unwrap();
         builder
-            .set_lobby_npcs(vec![crate::configuration::lobby::LobbyNpcConfig {
-                id: "creative-npc".to_string(),
-                destination: "creative".to_string(),
-                name: "Creative".to_string(),
-                x: 0.0,
-                y: 64.0,
-                z: 0.0,
-                yaw: 180.0,
-                pitch: 0.0,
-            }])
+            .set_lobby_npcs(
+                vec![crate::configuration::lobby::LobbyNpcConfig {
+                    id: "creative-npc".to_string(),
+                    destination: "creative".to_string(),
+                    name: "Creative".to_string(),
+                    x: 0.0,
+                    y: 64.0,
+                    z: 0.0,
+                    yaw: 180.0,
+                    pitch: 0.0,
+                    skin: None,
+                }],
+                HashMap::new(),
+            )
             .unwrap();
         assert!(matches!(
             builder.build(),

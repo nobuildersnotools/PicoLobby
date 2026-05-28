@@ -353,16 +353,23 @@ fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<
         LobbyNpcKind::Player => {}
     }
 
+    // NPCs keep their player-list entry for the whole session: the client loads
+    // a fake player's skin from that entry, and removing it (even a tick later)
+    // races against the skin being applied, leaving the NPC with the default
+    // Steve/Alex skin. On 1.19.3+ the entry is sent "unlisted" (`listed = false`)
+    // so the NPC stays out of the tab list; older clients have no such flag, so
+    // the NPC necessarily appears in the tab list there.
     let spawn = LobbySpawnInfo {
         uuid: npc.uuid,
         username: npc.name.clone(),
-        textures: None,
+        textures: npc.textures.clone(),
         entity_id: npc.entity_id,
         position: npc.position,
         crouching: false,
+        listed: false,
     };
 
-    let mut packets = if recipient_version.is_after_inclusive(ProtocolVersion::V1_20_2) {
+    if recipient_version.is_after_inclusive(ProtocolVersion::V1_20_2) {
         player_spawn_packets_current(&spawn)
     } else if recipient_version.is_after_inclusive(ProtocolVersion::V1_7_2)
         && recipient_version.is_before_inclusive(ProtocolVersion::V1_20)
@@ -370,35 +377,6 @@ fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<
         player_spawn_packets_legacy(&spawn, recipient_version)
     } else {
         Vec::new()
-    };
-
-    if npc_player_info_remove_after_spawn(recipient_version) {
-        packets.push(npc_player_info_remove_packet(
-            recipient_version,
-            npc.uuid,
-            &npc.name,
-        ));
-    }
-    packets
-}
-
-fn npc_player_info_remove_after_spawn(recipient_version: ProtocolVersion) -> bool {
-    !recipient_version.between_inclusive(ProtocolVersion::V1_9, ProtocolVersion::V1_12_2)
-}
-
-fn npc_player_info_remove_packet(
-    recipient_version: ProtocolVersion,
-    uuid: Uuid,
-    username: &str,
-) -> PacketRegistry {
-    if recipient_version.is_after_inclusive(ProtocolVersion::V1_19_3) {
-        PacketRegistry::PlayerInfoRemove(PlayerInfoRemovePacket::single(uuid))
-    } else if recipient_version.is_after_inclusive(ProtocolVersion::V1_8) {
-        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove(uuid, username.to_owned()))
-    } else {
-        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove_legacy_name(
-            username.to_owned(),
-        ))
     }
 }
 
@@ -408,7 +386,7 @@ fn player_info_packet(player: &LobbySpawnInfo) -> PacketRegistry {
             PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::skinless(
                 player.username.clone(),
                 player.uuid,
-                true,
+                player.listed,
             ))
         },
         |textures| {
@@ -416,7 +394,7 @@ fn player_info_packet(player: &LobbySpawnInfo) -> PacketRegistry {
                 player.username.clone(),
                 player.uuid,
                 textures.clone(),
-                true,
+                player.listed,
             ))
         },
     )
@@ -499,6 +477,7 @@ fn rotation_changed(previous_position: LobbyPosition, current_position: LobbyPos
 mod tests {
     use super::*;
     use crate::server_state::{LobbyRecipient, LobbySessionId};
+    use minecraft_packets::login::Property;
 
     const DEPARTED_NAME: &str = "departed";
 
@@ -1005,6 +984,7 @@ mod tests {
                 entity_id: self.entity_id,
                 position: self.position,
                 crouching: self.crouching,
+                listed: true,
             }
         }
 
@@ -1211,39 +1191,30 @@ mod tests {
     }
 
     #[test]
-    fn npc_spawn_keeps_player_info_for_v1_9_through_v1_12_2_interactions() {
+    fn npc_spawn_never_removes_player_info_entry() {
+        // The NPC's player-list entry must persist for the whole session so the
+        // client can load its skin; removing it races the skin and drops the NPC
+        // to the default Steve/Alex skin. This held across every supported range.
         for version in [
+            ProtocolVersion::V1_8,
             ProtocolVersion::V1_9,
-            ProtocolVersion::V1_9_3,
-            ProtocolVersion::V1_10,
-            ProtocolVersion::V1_11,
             ProtocolVersion::V1_12_2,
+            ProtocolVersion::V1_13,
+            ProtocolVersion::V1_15_2,
+            ProtocolVersion::V1_19_4,
+            ProtocolVersion::V1_20,
+            ProtocolVersion::V1_20_2,
         ] {
             let packets = npc_spawn_packets_for_join(&npc_spawn_plan(), version);
 
             assert_eq!(packets.len(), 4, "{version:?}");
             assert!(matches!(packets[0], PacketRegistry::PlayerInfoUpdate(_)));
-            assert!(matches!(packets[1], PacketRegistry::SpawnPlayer(_)));
-            assert!(matches!(packets[2], PacketRegistry::SetEntityMetadata(_)));
-            assert!(matches!(packets[3], PacketRegistry::RotateHead(_)));
-        }
-    }
-
-    #[test]
-    fn npc_spawn_still_removes_player_info_outside_v1_9_through_v1_12_2() {
-        for version in [
-            ProtocolVersion::V1_8,
-            ProtocolVersion::V1_13,
-            ProtocolVersion::V1_14_4,
-            ProtocolVersion::V1_15_2,
-        ] {
-            let packets = npc_spawn_packets_for_join(&npc_spawn_plan(), version);
-
-            assert_eq!(packets.len(), 5, "{version:?}");
-            assert!(matches!(
-                packets.last(),
-                Some(PacketRegistry::PlayerInfoUpdate(_))
-            ));
+            assert!(
+                !packets[1..]
+                    .iter()
+                    .any(|p| matches!(p, PacketRegistry::PlayerInfoRemove(_))),
+                "{version:?} must not remove the NPC player-list entry"
+            );
         }
     }
 
@@ -1369,15 +1340,70 @@ mod tests {
     }
 
     fn npc_spawn_plan() -> LobbyNpcSpawnPlan {
+        npc_spawn_plan_with_skin(None)
+    }
+
+    fn npc_spawn_plan_with_skin(textures: Option<Property>) -> LobbyNpcSpawnPlan {
         let mut npc = LobbyNpc::player(
             "survival-npc",
             "survival",
             "Survival",
             LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
-        );
+        )
+        .with_textures(textures);
         npc.entity_id = EntityId::new(300);
         LobbyNpcSpawnPlan {
             npcs: std::sync::Arc::from(vec![npc]),
         }
+    }
+
+    #[test]
+    fn npc_spawn_embeds_skin_for_legacy_client() {
+        let value = "dGV4dHVyZXM=";
+        let textures = Property::textures(value, Some("c2lnbmF0dXJl"));
+        let skinned = npc_spawn_packets_for_join(
+            &npc_spawn_plan_with_skin(Some(textures)),
+            ProtocolVersion::V1_7_2,
+        );
+        let skinless =
+            npc_spawn_packets_for_join(&npc_spawn_plan_with_skin(None), ProtocolVersion::V1_7_2);
+
+        // The textures ride along in the SpawnPlayer payload for legacy clients.
+        let skinned_spawn = skinned[1].encode_packet(ProtocolVersion::V1_7_2).unwrap();
+        let skinless_spawn = skinless[1].encode_packet(ProtocolVersion::V1_7_2).unwrap();
+
+        assert!(skinned_spawn.data().len() > skinless_spawn.data().len());
+        let needle = value.as_bytes();
+        assert!(
+            skinned_spawn
+                .data()
+                .windows(needle.len())
+                .any(|window| window == needle)
+        );
+    }
+
+    #[test]
+    fn npc_spawn_embeds_skin_for_modern_client() {
+        let value = "dGV4dHVyZXM=";
+        let textures = Property::textures(value, Some("c2lnbmF0dXJl"));
+        let skinned = npc_spawn_packets_for_join(
+            &npc_spawn_plan_with_skin(Some(textures)),
+            ProtocolVersion::V1_20_2,
+        );
+        let skinless =
+            npc_spawn_packets_for_join(&npc_spawn_plan_with_skin(None), ProtocolVersion::V1_20_2);
+
+        // For modern clients the skin is carried in the player-info update.
+        let skinned_info = skinned[0].encode_packet(ProtocolVersion::V1_20_2).unwrap();
+        let skinless_info = skinless[0].encode_packet(ProtocolVersion::V1_20_2).unwrap();
+
+        assert!(skinned_info.data().len() > skinless_info.data().len());
+        let needle = value.as_bytes();
+        assert!(
+            skinned_info
+                .data()
+                .windows(needle.len())
+                .any(|window| window == needle)
+        );
     }
 }

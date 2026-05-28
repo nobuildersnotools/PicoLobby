@@ -105,6 +105,16 @@ y = 320.0
 z = 4.0
 yaw = 180.0
 pitch = 0.0
+# Optional skin for the [[lobby.npcs]] entry above. Omit for the default skin.
+# Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
+# NPC spawns skinless without blocking startup.
+# Mirror an existing account by name or UUID (resolved from Mojang at startup):
+# [lobby.npcs.skin]
+# player = "Notch"
+# Or provide a raw signed textures property (offline; signature is optional):
+# [lobby.npcs.skin]
+# value = "ewogICJ0aW1lc3RhbXAiIDog..."
+# signature = "GnG2..."
 
 [compression]
 threshold = -1

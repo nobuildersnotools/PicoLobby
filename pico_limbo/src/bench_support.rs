@@ -505,6 +505,7 @@ fn lobby_heavy_config_toml() -> String {
             z: f64::from(index * 2),
             yaw: 180.0,
             pitch: 0.0,
+            skin: None,
         })
         .collect();
     config.scoreboard.lines = (0..15)

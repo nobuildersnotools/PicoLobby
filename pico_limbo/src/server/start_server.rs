@@ -6,8 +6,11 @@ use crate::configuration::lobby::LobbyConfig;
 use crate::configuration::tab_list::TabListMode;
 use crate::configuration::title::TitleConfig;
 use crate::configuration::world_config::boundaries::BoundariesConfig;
+use crate::handlers::play::fetch_minecraft_profile::resolve_npc_skin;
 use crate::server::network::Server;
 use crate::server_state::{LobbyDestination, ServerState, ServerStateBuilderError};
+use minecraft_packets::login::Property;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use tracing::{Level, debug, error};
@@ -22,8 +25,9 @@ pub async fn start_server(config_path: PathBuf, logging_level: u8) -> ExitCode {
     };
 
     let bind = cfg.bind.clone();
+    let npc_skins = resolve_lobby_npc_skins(&cfg).await;
 
-    match build_state(cfg) {
+    match build_state(cfg, npc_skins) {
         Ok(server_state) => {
             Server::new(&bind, server_state).run().await;
             ExitCode::SUCCESS
@@ -55,7 +59,28 @@ fn load_configuration(config_path: &PathBuf) -> Option<Config> {
     None
 }
 
-fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
+/// Resolve the textures for every configured lobby NPC that declares a skin.
+///
+/// Resolution happens once at startup in the async context. Failures are logged
+/// by [`resolve_npc_skin`] and yield `None`, so a bad skin never blocks startup.
+async fn resolve_lobby_npc_skins(cfg: &Config) -> HashMap<String, Option<Property>> {
+    if !cfg.lobby.enabled {
+        return HashMap::new();
+    }
+
+    let mut skins = HashMap::new();
+    for npc in &cfg.lobby.npcs {
+        if let Some(skin) = &npc.skin {
+            skins.insert(npc.id.clone(), resolve_npc_skin(&npc.id, skin).await);
+        }
+    }
+    skins
+}
+
+fn build_state(
+    cfg: Config,
+    npc_skins: HashMap<String, Option<Property>>,
+) -> Result<ServerState, ServerStateBuilderError> {
     let mut server_state_builder = ServerState::builder();
     let lobby_enabled = cfg.lobby.enabled;
 
@@ -64,7 +89,7 @@ fn build_state(cfg: Config) -> Result<ServerState, ServerStateBuilderError> {
     apply_forwarding(&mut server_state_builder, cfg.forwarding.into());
 
     if lobby_enabled {
-        apply_lobby_options(&mut server_state_builder, cfg.lobby)?;
+        apply_lobby_options(&mut server_state_builder, cfg.lobby, npc_skins)?;
     } else {
         server_state_builder
             .set_lobby_enabled(false)
@@ -139,6 +164,7 @@ fn apply_world_and_visual_options(
 fn apply_lobby_options(
     server_state_builder: &mut crate::server_state::ServerStateBuilder,
     lobby: LobbyConfig,
+    npc_skins: HashMap<String, Option<Property>>,
 ) -> Result<(), ServerStateBuilderError> {
     let lobby_destinations = lobby
         .servers
@@ -154,7 +180,7 @@ fn apply_lobby_options(
         .set_lobby_join_message(lobby.join_message)
         .set_lobby_leave_message(lobby.leave_message)
         .set_lobby_destinations(lobby_destinations)?
-        .set_lobby_npcs(lobby.npcs)?
+        .set_lobby_npcs(lobby.npcs, npc_skins)?
         .set_lobby_selector(lobby.selector)?
         .set_lobby_visibility_toggle(lobby.visibility_toggle)?;
     Ok(())
@@ -213,7 +239,7 @@ mod tests {
         cfg.lobby.enabled = false;
         cfg.lobby.servers[0].server.clear();
 
-        assert!(build_state(cfg).is_ok());
+        assert!(build_state(cfg, HashMap::new()).is_ok());
     }
 
     #[test]
@@ -223,7 +249,7 @@ mod tests {
         cfg.lobby.servers[0].server.clear();
 
         assert!(matches!(
-            build_state(cfg),
+            build_state(cfg, HashMap::new()),
             Err(ServerStateBuilderError::EmptyServerName(id)) if id == "survival"
         ));
     }

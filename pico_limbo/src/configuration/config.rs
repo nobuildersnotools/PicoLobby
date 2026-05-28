@@ -139,8 +139,61 @@ pub fn load_or_create<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
 fn create_default_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
     let cfg = Config::default();
     let toml_str = toml::to_string_pretty(&cfg)?;
+    let toml_str = annotate_npc_skin_example(&toml_str);
     fs::write(path, toml_str)?;
     Ok(cfg)
+}
+
+/// Commented `[lobby.npcs.skin]` example injected into freshly generated configs.
+///
+/// The NPC `skin` field is optional and omitted from serialization when unset
+/// (no skin = default Steve/Alex), so it never appears in the generated file on
+/// its own. We surface it here as a discoverable, copy-pasteable example.
+const NPC_SKIN_EXAMPLE: &str = "\
+# Optional skin for the [[lobby.npcs]] entry above. Omit for the default skin.
+# Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
+# NPC spawns skinless without blocking startup.
+# Mirror an existing account by name or UUID (resolved from Mojang at startup):
+# [lobby.npcs.skin]
+# player = \"Notch\"
+# Or provide a raw signed textures property (offline; signature is optional):
+# [lobby.npcs.skin]
+# value = \"ewogICJ0aW1lc3RhbXAiIDog...\"
+# signature = \"GnG2...\"
+";
+
+/// Insert [`NPC_SKIN_EXAMPLE`] immediately after the first `[[lobby.npcs]]`
+/// block, before the following section, so the commented `[lobby.npcs.skin]`
+/// lands in a position where it is valid TOML when uncommented.
+fn annotate_npc_skin_example(toml_str: &str) -> String {
+    let Some(npc_pos) = toml_str.find("[[lobby.npcs]]") else {
+        return toml_str.to_string();
+    };
+
+    // The next line beginning with `[` after the NPC block is the following
+    // section header (NPC field lines never start with `[`). If there is none,
+    // the NPC block is the final section and we append at the end.
+    let insert_at = toml_str[npc_pos..]
+        .find("\n[")
+        .map_or(toml_str.len(), |rel| npc_pos + rel + 1);
+    let (head, tail) = toml_str.split_at(insert_at);
+
+    let mut out = String::with_capacity(toml_str.len() + NPC_SKIN_EXAMPLE.len() + 2);
+    out.push_str(head);
+    // Ensure a blank line separates the example from the NPC block above.
+    if !head.ends_with("\n\n") {
+        out.push_str(if head.ends_with('\n') { "\n" } else { "\n\n" });
+    }
+    out.push_str(NPC_SKIN_EXAMPLE);
+    if tail.is_empty() {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+    } else {
+        out.push('\n');
+        out.push_str(tail);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -215,5 +268,40 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn generated_config_documents_npc_skin_and_still_parses() {
+        let toml_str = toml::to_string_pretty(&Config::default()).unwrap();
+        let annotated = annotate_npc_skin_example(&toml_str);
+
+        // The commented example is present and sits before the next section.
+        assert!(annotated.contains("# [lobby.npcs.skin]"));
+        assert!(annotated.contains("# player = \"Notch\""));
+        let skin_pos = annotated.find("# [lobby.npcs.skin]").unwrap();
+        let npc_pos = annotated.find("[[lobby.npcs]]").unwrap();
+        let next_section = annotated.find("[lobby.private_messages]").unwrap();
+        assert!(npc_pos < skin_pos && skin_pos < next_section);
+
+        // Comments are ignored, so the generated file parses unchanged.
+        toml::from_str::<Config>(&annotated).unwrap();
+    }
+
+    #[test]
+    fn uncommented_skin_example_is_valid_config() {
+        let toml_str = toml::to_string_pretty(&Config::default()).unwrap();
+        let annotated = annotate_npc_skin_example(&toml_str);
+
+        // Uncomment only the player-variant lines of the injected example.
+        let uncommented = annotated.replace(
+            "# [lobby.npcs.skin]\n# player = \"Notch\"",
+            "[lobby.npcs.skin]\nplayer = \"Notch\"",
+        );
+        let config: Config = toml::from_str(&uncommented).unwrap();
+
+        assert!(matches!(
+            config.lobby.npcs[0].skin,
+            Some(crate::configuration::lobby::NpcSkinConfig::Player { ref player }) if player == "Notch"
+        ));
     }
 }
