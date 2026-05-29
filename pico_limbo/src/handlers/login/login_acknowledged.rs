@@ -16,7 +16,8 @@ use minecraft_packets::configuration::update_tags_packet::{
 use minecraft_packets::login::login_acknowledged_packet::LoginAcknowledgedPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, State, VarInt};
 use pico_precomputed_registries::PrecomputedRegistries;
-use pico_registries::registry_provider::RegistryProvider;
+use pico_registries::Identifier;
+use pico_registries::registry_provider::{RegistryDataEntry, RegistryProvider};
 
 impl PacketHandler for LoginAcknowledgedPacket {
     fn handle(
@@ -90,22 +91,16 @@ fn send_configuration_registry_packets(
                 .get_registry_data_v1_20_5()?
                 .into_iter()
                 .map(move |(registry_id, registry_entries)| {
-                    let packet = RegistryDataPacket::registry(
-                        registry_id,
-                        registry_entries
-                            .iter()
-                            .map(|entry| {
-                                RegistryEntry::new(
-                                    entry.entry_id.clone(),
-                                    if omit_known_pack_data {
-                                        None
-                                    } else {
-                                        entry.nbt_bytes.clone()
-                                    },
-                                )
-                            })
-                            .collect(),
-                    );
+                    let entries = registry_entries
+                        .iter()
+                        .map(|entry| {
+                            RegistryEntry::new(
+                                entry.entry_id.clone(),
+                                registry_entry_payload(&registry_id, entry, omit_known_pack_data),
+                            )
+                        })
+                        .collect();
+                    let packet = RegistryDataPacket::registry(registry_id, entries);
                     PacketRegistry::RegistryData(packet)
                 }),
         );
@@ -154,6 +149,22 @@ fn send_configuration_registry_packets(
     let packet = FinishConfigurationPacket {};
     batch.queue(|| PacketRegistry::FinishConfiguration(packet));
     Ok(())
+}
+
+fn registry_entry_payload(
+    registry_id: &Identifier,
+    entry: &RegistryDataEntry,
+    omit_known_pack_data: bool,
+) -> Option<std::borrow::Cow<'static, [u8]>> {
+    if omit_known_pack_data && !is_required_custom_registry_data(registry_id) {
+        None
+    } else {
+        entry.nbt_bytes.clone()
+    }
+}
+
+fn is_required_custom_registry_data(registry_id: &Identifier) -> bool {
+    registry_id.namespace == "minecraft" && registry_id.thing == "dimension_type"
 }
 
 #[cfg(test)]
@@ -367,5 +378,37 @@ mod tests {
                 protocol_version.humanize()
             );
         }
+    }
+
+    #[test]
+    fn known_pack_omission_keeps_dimension_type_payloads() {
+        let registry_provider = PrecomputedRegistries::new(ProtocolVersion::V1_21_11);
+        let registries = registry_provider.get_registry_data_v1_20_5().unwrap();
+
+        let dimension_type = registries
+            .iter()
+            .find(|(registry_id, _)| registry_id.to_string() == "minecraft:dimension_type")
+            .expect("dimension_type registry should be present");
+        let biome = registries
+            .iter()
+            .find(|(registry_id, _)| registry_id.to_string() == "minecraft:worldgen/biome")
+            .expect("biome registry should be present");
+
+        assert!(
+            dimension_type.1.iter().all(|entry| registry_entry_payload(
+                &dimension_type.0,
+                entry,
+                true
+            )
+            .is_some()),
+            "dimension_type payloads must be sent even when minecraft:core is known"
+        );
+        assert!(
+            biome
+                .1
+                .iter()
+                .all(|entry| registry_entry_payload(&biome.0, entry, true).is_none()),
+            "other known core registry payloads should still be omitted"
+        );
     }
 }
