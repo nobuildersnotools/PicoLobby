@@ -883,8 +883,18 @@ mod tests {
             (ProtocolVersion::V1_13_2, 0x0d, &[0xac, 0x02, 0, 0][..]),
             (ProtocolVersion::V1_14_4, 0x0e, &[0xac, 0x02, 0, 0][..]),
             (ProtocolVersion::V1_15_2, 0x0e, &[0xac, 0x02, 0, 0][..]),
-            (ProtocolVersion::V1_19_4, 0x0f, &[0xac, 0x02, 0, 0, 0][..]),
-            (ProtocolVersion::V1_20_5, 0x13, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_16_2, 0x0e, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_18_2, 0x0d, &[0xac, 0x02, 0, 0, 0][..]),
+            // The 1.19 chat rework shifts serverbound ids and 1.19.3 partially reverts it,
+            // so the interact id is non-monotonic across 1.19.x-1.20.x.
+            (ProtocolVersion::V1_19, 0x0f, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_19_1, 0x10, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_19_3, 0x0f, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_19_4, 0x10, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_20, 0x10, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_20_2, 0x12, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_20_3, 0x13, &[0xac, 0x02, 0, 0, 0][..]),
+            (ProtocolVersion::V1_20_5, 0x16, &[0xac, 0x02, 0, 0, 0][..]),
         ] {
             let raw_packet = RawPacket::from_bytes(packet_id, data);
             let packet = PacketRegistry::decode_packet(version, State::Play, raw_packet).unwrap();

@@ -501,10 +501,15 @@ fn serverbound_packet_id_override(version_number: i32, packet_name: &str) -> Opt
         (393, "minecraft:interact") => Some(0x0d),
         (477 | 573 | 735 | 751, "minecraft:interact") => Some(0x0e),
         (755 | 757, "minecraft:interact") => Some(0x0d),
-        (759, "minecraft:interact") => Some(0x0e),
-        (760..=763, "minecraft:interact") => Some(0x0f),
-        (764 | 765, "minecraft:interact") => Some(0x11),
-        (766, "minecraft:interact") => Some(0x13),
+        // The 1.19 chat rework (and its later partial revert in 1.19.3) reshuffles the
+        // serverbound play ids, so the interact id is non-monotonic across this range.
+        (759, "minecraft:interact") => Some(0x0f),
+        (760, "minecraft:interact") => Some(0x10),
+        (761, "minecraft:interact") => Some(0x0f),
+        (762 | 763, "minecraft:interact") => Some(0x10),
+        (764, "minecraft:interact") => Some(0x12),
+        (765, "minecraft:interact") => Some(0x13),
+        (766, "minecraft:interact") => Some(0x16),
         // container_click (serverbound, formerly window_click)
         (4 | 47, "minecraft:container_click") => Some(0x0e),
         (107 | 110 | 210 | 315, "minecraft:container_click") => Some(0x07),
