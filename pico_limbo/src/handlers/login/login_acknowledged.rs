@@ -16,8 +16,7 @@ use minecraft_packets::configuration::update_tags_packet::{
 use minecraft_packets::login::login_acknowledged_packet::LoginAcknowledgedPacket;
 use minecraft_protocol::prelude::{ProtocolVersion, State, VarInt};
 use pico_precomputed_registries::PrecomputedRegistries;
-use pico_registries::Identifier;
-use pico_registries::registry_provider::{RegistryDataEntry, RegistryProvider};
+use pico_registries::registry_provider::RegistryProvider;
 
 impl PacketHandler for LoginAcknowledgedPacket {
     fn handle(
@@ -47,8 +46,7 @@ impl PacketHandler for ServerBoundKnownPacksPacket {
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
         let mut batch = Batch::new();
         let protocol_version = client_state.protocol_version();
-        let omit_known_pack_data = self.contains_minecraft_core(protocol_version.humanize());
-        send_configuration_registry_packets(&mut batch, protocol_version, omit_known_pack_data)?;
+        send_configuration_registry_packets(&mut batch, protocol_version)?;
         Ok(batch)
     }
 }
@@ -69,7 +67,7 @@ fn send_configuration_packets(
         return Ok(());
     }
 
-    send_configuration_registry_packets(batch, protocol_version, false)
+    send_configuration_registry_packets(batch, protocol_version)
 }
 
 fn supports_serverbound_known_packs(protocol_version: ProtocolVersion) -> bool {
@@ -79,7 +77,6 @@ fn supports_serverbound_known_packs(protocol_version: ProtocolVersion) -> bool {
 fn send_configuration_registry_packets(
     batch: &mut Batch<PacketRegistry>,
     protocol_version: ProtocolVersion,
-    omit_known_pack_data: bool,
 ) -> Result<(), PacketHandlerError> {
     let registry_provider = PrecomputedRegistries::new(protocol_version);
 
@@ -94,10 +91,7 @@ fn send_configuration_registry_packets(
                     let entries = registry_entries
                         .iter()
                         .map(|entry| {
-                            RegistryEntry::new(
-                                entry.entry_id.clone(),
-                                registry_entry_payload(&registry_id, entry, omit_known_pack_data),
-                            )
+                            RegistryEntry::new(entry.entry_id.clone(), entry.nbt_bytes.clone())
                         })
                         .collect();
                     let packet = RegistryDataPacket::registry(registry_id, entries);
@@ -149,22 +143,6 @@ fn send_configuration_registry_packets(
     let packet = FinishConfigurationPacket {};
     batch.queue(|| PacketRegistry::FinishConfiguration(packet));
     Ok(())
-}
-
-fn registry_entry_payload(
-    registry_id: &Identifier,
-    entry: &RegistryDataEntry,
-    omit_known_pack_data: bool,
-) -> Option<std::borrow::Cow<'static, [u8]>> {
-    if omit_known_pack_data && !is_required_custom_registry_data(registry_id) {
-        None
-    } else {
-        entry.nbt_bytes.clone()
-    }
-}
-
-fn is_required_custom_registry_data(registry_id: &Identifier) -> bool {
-    registry_id.namespace == "minecraft" && registry_id.thing == "dimension_type"
 }
 
 #[cfg(test)]
@@ -300,7 +278,7 @@ mod tests {
         let mut batch = Batch::new();
 
         // When
-        send_configuration_registry_packets(&mut batch, ProtocolVersion::V1_20_5, false).unwrap();
+        send_configuration_registry_packets(&mut batch, ProtocolVersion::V1_20_5).unwrap();
         let mut batch = batch.into_stream();
 
         // Then
@@ -315,6 +293,32 @@ mod tests {
             PacketRegistry::FinishConfiguration(_)
         ));
         assert!(batch.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_known_packs_response_sends_full_registry_data_v1_21_4() {
+        // Given
+        let mut batch = Batch::new();
+        let registry_provider = PrecomputedRegistries::new(ProtocolVersion::V1_21_4);
+        let registry_count = registry_provider.get_registry_data_v1_20_5().unwrap().len();
+
+        // When
+        send_configuration_registry_packets(&mut batch, ProtocolVersion::V1_21_4).unwrap();
+        let packets = batch.into_stream().collect::<Vec<_>>().await;
+
+        // Then
+        assert_eq!(
+            packets
+                .iter()
+                .filter(|packet| matches!(packet, PacketRegistry::RegistryData(_)))
+                .count(),
+            registry_count,
+            "known-pack responses should send PicoLobby's full configured registry set"
+        );
+        assert!(matches!(
+            packets.last(),
+            Some(PacketRegistry::FinishConfiguration(_))
+        ));
     }
 
     #[test]
@@ -381,34 +385,65 @@ mod tests {
     }
 
     #[test]
-    fn known_pack_omission_keeps_dimension_type_payloads() {
-        let registry_provider = PrecomputedRegistries::new(ProtocolVersion::V1_21_11);
-        let registries = registry_provider.get_registry_data_v1_20_5().unwrap();
+    fn known_pack_response_uses_picolobby_registry_payloads() {
+        for protocol_version in [
+            ProtocolVersion::V1_21,
+            ProtocolVersion::V1_21_2,
+            ProtocolVersion::V1_21_4,
+            ProtocolVersion::V1_21_5,
+            ProtocolVersion::V1_21_6,
+            ProtocolVersion::V1_21_7,
+            ProtocolVersion::V1_21_9,
+            ProtocolVersion::V1_21_11,
+        ] {
+            let registry_provider = PrecomputedRegistries::new(protocol_version);
+            let registries = registry_provider.get_registry_data_v1_20_5().unwrap();
 
-        let dimension_type = registries
-            .iter()
-            .find(|(registry_id, _)| registry_id.to_string() == "minecraft:dimension_type")
-            .expect("dimension_type registry should be present");
-        let biome = registries
-            .iter()
-            .find(|(registry_id, _)| registry_id.to_string() == "minecraft:worldgen/biome")
-            .expect("biome registry should be present");
-
-        assert!(
-            dimension_type.1.iter().all(|entry| registry_entry_payload(
-                &dimension_type.0,
-                entry,
-                true
-            )
-            .is_some()),
-            "dimension_type payloads must be sent even when minecraft:core is known"
-        );
-        assert!(
-            biome
-                .1
+            let dimension_type = registries
                 .iter()
-                .all(|entry| registry_entry_payload(&biome.0, entry, true).is_none()),
-            "other known core registry payloads should still be omitted"
-        );
+                .find(|(registry_id, _)| registry_id.to_string() == "minecraft:dimension_type")
+                .expect("dimension_type registry should be present");
+            let biome = registries
+                .iter()
+                .find(|(registry_id, _)| registry_id.to_string() == "minecraft:worldgen/biome")
+                .expect("biome registry should be present");
+            let painting_variant = registries
+                .iter()
+                .find(|(registry_id, _)| registry_id.to_string() == "minecraft:painting_variant")
+                .expect("painting_variant registry should be present");
+            let wolf_variant = registries
+                .iter()
+                .find(|(registry_id, _)| registry_id.to_string() == "minecraft:wolf_variant")
+                .expect("wolf_variant registry should be present");
+
+            assert!(
+                dimension_type
+                    .1
+                    .iter()
+                    .all(|entry| entry.nbt_bytes.is_some()),
+                "dimension_type payloads must be sent to {} clients",
+                protocol_version.humanize()
+            );
+            assert!(
+                biome.1.iter().all(|entry| entry.nbt_bytes.is_some()),
+                "biome payloads must come from PicoLobby's registry data for {} clients",
+                protocol_version.humanize()
+            );
+            assert!(
+                !painting_variant.1.is_empty()
+                    && painting_variant
+                        .1
+                        .iter()
+                        .all(|entry| entry.nbt_bytes.is_some()),
+                "painting_variant payloads must stay non-empty for {} clients",
+                protocol_version.humanize()
+            );
+            assert!(
+                !wolf_variant.1.is_empty()
+                    && wolf_variant.1.iter().all(|entry| entry.nbt_bytes.is_some()),
+                "wolf_variant payloads must stay non-empty for {} clients",
+                protocol_version.humanize()
+            );
+        }
     }
 }

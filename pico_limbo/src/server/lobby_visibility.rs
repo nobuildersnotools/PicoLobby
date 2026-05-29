@@ -1093,6 +1093,15 @@ mod tests {
                 tail_offset: 47,
                 tail_bytes: &[0, 0, 0, 0, 0, 0, 0],
             },
+            Case {
+                version: ProtocolVersion::V1_21_4,
+                entity_id: 400,
+                len: 54,
+                type_offset: 18,
+                type_bytes: &[0x93, 0x01],
+                tail_offset: 47,
+                tail_bytes: &[0, 0, 0, 0, 0, 0, 0],
+            },
             // V26_1: entity_id=1 is a 1-byte VarInt so type lands at offset 17
             Case {
                 version: ProtocolVersion::V26_1,

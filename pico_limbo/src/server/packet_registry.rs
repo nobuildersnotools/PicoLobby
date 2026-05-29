@@ -949,6 +949,8 @@ mod tests {
             (ProtocolVersion::V1_12_2, 0x42, 0x3b, 0x44, 0x45),
             (ProtocolVersion::V1_13, 0x45, 0x3e, 0x47, 0x48),
             (ProtocolVersion::V1_17, 0x53, 0x4c, 0x55, 0x56),
+            (ProtocolVersion::V1_20_2, 0x5a, 0x53, 0x5c, 0x5d),
+            (ProtocolVersion::V1_20_3, 0x5c, 0x55, 0x5e, 0x5f),
             (ProtocolVersion::V1_20_5, 0x5e, 0x57, 0x60, 0x61),
             (ProtocolVersion::V26_1, 106, 98, 109, 110),
         ] {

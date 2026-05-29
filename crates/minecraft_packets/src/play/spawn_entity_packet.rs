@@ -42,6 +42,8 @@ fn player_entity_type_id(version: ProtocolVersion) -> i32 {
         151
     } else if version.is_after_inclusive(ProtocolVersion::V1_21_6) {
         149
+    } else if version == ProtocolVersion::V1_21_4 {
+        147
     } else if version.is_after_inclusive(ProtocolVersion::V1_21_2) {
         148
     } else if version.is_after_inclusive(ProtocolVersion::V1_20_5) {
@@ -104,7 +106,8 @@ mod tests {
     #[test]
     fn player_entity_type_id_tracks_1_21_registry_shifts() {
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21), 128);
-        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_4), 148);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_2), 148);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_4), 147);
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_5), 148);
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_6), 149);
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_7), 149);
