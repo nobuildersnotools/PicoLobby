@@ -12,15 +12,27 @@ use pico_nbt::{IndexMap, Value};
 use serde::Serialize;
 use std::io::Write;
 
-fn height_maps() -> Value {
+fn height_maps(protocol_version: ProtocolVersion) -> Value {
+    // The MOTION_BLOCKING heightmap stores 256 entries of 9 bits each. Prior to
+    // 1.16 these are packed as an uninterrupted bit stream where entries may span
+    // long boundaries, using exactly ceil(256 * 9 / 64) = 36 longs. From 1.16 on,
+    // entries no longer span longs (7 per long, one padding bit each), needing
+    // ceil(256 / 7) = 37 longs. Sending 37 longs to a 1.14/1.15 client makes its
+    // BitStorage copy past the end of its 36-long backing array.
+    let long_count = if protocol_version.is_before_inclusive(ProtocolVersion::V1_15_2) {
+        36
+    } else {
+        37
+    };
     let mut compound = IndexMap::new();
-    compound.insert("MOTION_BLOCKING".to_string(), Value::LongArray(vec![0; 37]));
+    compound.insert(
+        "MOTION_BLOCKING".to_string(),
+        Value::LongArray(vec![0; long_count]),
+    );
     Value::Compound(compound)
 }
 
 pub struct ChunkData {
-    height_maps: Value,
-
     v1_21_5_height_maps: LengthPaddedVec<HeightMap>,
 
     /// Biome IDs, ordered by x then z then y, in 4×4×4 blocks.
@@ -51,7 +63,7 @@ impl EncodePacket for ChunkData {
         }
 
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_21_4) {
-            self.height_maps.encode(writer, protocol_version)?;
+            height_maps(protocol_version).encode(writer, protocol_version)?;
         } else {
             self.v1_21_5_height_maps.encode(writer, protocol_version)?;
         }
@@ -78,12 +90,9 @@ impl EncodePacket for ChunkData {
 
 impl ChunkData {
     pub fn void(context: VoidChunkContext) -> Self {
-        let root_tag = height_maps();
-
         let section_count = context.dimension_height / ChunkSection::SECTION_SIZE;
 
         Self {
-            height_maps: root_tag,
             v1_21_5_height_maps: LengthPaddedVec::new(vec![HeightMap {
                 height_map_type: VarInt::new(4), // Motionblock type
                 data: LengthPaddedVec::new(vec![0; 37]),
@@ -104,8 +113,6 @@ impl ChunkData {
         schematic_context: &WorldContext,
         protocol_version: ProtocolVersion,
     ) -> Self {
-        let root_tag = height_maps();
-
         let mut data = Vec::new();
         let negative_section_count =
             chunk_context.dimension_min_y.abs() / ChunkSection::SECTION_SIZE;
@@ -134,7 +141,6 @@ impl ChunkData {
         );
 
         Self {
-            height_maps: root_tag,
             v1_21_5_height_maps: LengthPaddedVec::new(vec![HeightMap {
                 height_map_type: VarInt::new(4), // Motionblock type
                 data: LengthPaddedVec::new(vec![0; 37]),
@@ -222,7 +228,7 @@ impl ChunkData {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_14) {
-            self.height_maps.encode(writer, protocol_version)?;
+            height_maps(protocol_version).encode(writer, protocol_version)?;
         }
 
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_15) {
@@ -238,11 +244,14 @@ impl ChunkData {
             }
         }
 
-        if protocol_version.between_inclusive(ProtocolVersion::V1_14, ProtocolVersion::V1_14_4) {
+        if protocol_version.between_inclusive(ProtocolVersion::V1_13, ProtocolVersion::V1_14_4) {
+            // 1.13–1.14: 256 biome integers (one per column, z * 16 | x), appended
+            // to the chunk data. Before 1.13 these were single bytes; 1.15 moved to
+            // a 1024-int 3D array encoded ahead of the section data instead.
             for biome_id in self.biomes.iter().take(256) {
                 biome_id.encode(&mut payload_writer, protocol_version)?;
             }
-        } else if protocol_version.is_before_inclusive(ProtocolVersion::V1_13_2) {
+        } else if protocol_version.is_before_inclusive(ProtocolVersion::V1_12_2) {
             let biome_id = self.biomes.first().copied().unwrap_or(1).clamp(0, 255) as u8;
             payload_writer.write_bytes(&vec![biome_id; 256])?;
         }
@@ -773,7 +782,33 @@ mod tests {
     }
 
     #[test]
-    fn v1_13_full_chunk_payload_keeps_byte_biomes() {
+    fn motion_blocking_heightmap_length_matches_packing_format() {
+        // Pre-1.16 clients pack the heightmap as a spanning bit stream (36 longs);
+        // 1.16+ clients pad each long (37 longs). A length mismatch makes the
+        // client BitStorage copy out of bounds.
+        for (version, expected_longs) in [
+            (ProtocolVersion::V1_14_4, 36usize),
+            (ProtocolVersion::V1_15_2, 36),
+            (ProtocolVersion::V1_16, 37),
+        ] {
+            match height_maps(version) {
+                Value::Compound(compound) => match compound.get("MOTION_BLOCKING") {
+                    Some(Value::LongArray(data)) => assert_eq!(
+                        data.len(),
+                        expected_longs,
+                        "wrong MOTION_BLOCKING long count for {version:?}"
+                    ),
+                    other => panic!("MOTION_BLOCKING must be a long array, got {other:?}"),
+                },
+                other => panic!("heightmaps must be a compound, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn v1_13_full_chunk_payload_encodes_biomes_as_ints() {
+        // 1.13 changed the trailing biome array from 256 bytes to 256 ints. Sending
+        // bytes leaves the client reading past the end of the chunk data buffer.
         let chunk_data = ChunkData::void(VoidChunkContext {
             chunk_x: 0,
             chunk_z: 0,
@@ -788,10 +823,14 @@ mod tests {
             .unwrap();
 
         let bytes = writer.into_inner();
-        let expected_payload_len = (16 * 6149) + 256;
-        assert_eq!(&bytes[0..3], &[0xD0, 0x82, 0x06]);
+        let expected_payload_len = (16 * 6149) + (256 * 4);
+        assert_eq!(&bytes[0..3], &[0xD0, 0x88, 0x06]);
         assert_eq!(bytes.len(), 3 + expected_payload_len + 1);
-        assert_eq!(bytes[3 + (16 * 6149)], 1);
+        assert_eq!(
+            &bytes[3 + (16 * 6149)..3 + (16 * 6149) + 4],
+            &[0, 0, 0, 1],
+            "first biome must be encoded as a big-endian int"
+        );
     }
 }
 
