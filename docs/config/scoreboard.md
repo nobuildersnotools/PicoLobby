@@ -22,4 +22,4 @@ lines = [
 
 The first scoreboard implementation is sidebar-only. Up to 15 lines are supported, matching the practical sidebar limit. Duplicate-looking lines are supported because PicoLobby sends hidden unique entry keys for each row.
 
-The supported placeholders are `{player}`, `{online}`, `{max_players}`, and `{server}`. Unknown placeholders are left unchanged.
+Scoreboard text supports the same runtime placeholders as other user-facing text templates: `{player}`, `{online}`, `{max_players}`, and `{server}`. Unknown placeholders are left unchanged.

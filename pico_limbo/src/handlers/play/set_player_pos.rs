@@ -12,11 +12,6 @@ impl PacketHandler for SetPlayerPositionPacket {
         client_state: &mut ClientState,
         server_state: &ServerState,
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
-        Ok(teleport_player_to_spawn_out_of_bounds(
-            client_state,
-            server_state,
-            self.position(),
-            None,
-        ))
+        teleport_player_to_spawn_out_of_bounds(client_state, server_state, self.position(), None)
     }
 }

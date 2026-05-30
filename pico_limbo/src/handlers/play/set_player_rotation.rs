@@ -13,11 +13,11 @@ impl PacketHandler for SetPlayerRotationPacket {
         server_state: &ServerState,
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
         let position = client_state.position();
-        Ok(teleport_player_to_spawn_out_of_bounds(
+        teleport_player_to_spawn_out_of_bounds(
             client_state,
             server_state,
             position,
             Some((self.yaw, self.pitch)),
-        ))
+        )
     }
 }

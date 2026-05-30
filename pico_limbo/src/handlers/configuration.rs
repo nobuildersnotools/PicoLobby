@@ -8,8 +8,8 @@ use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_brand::SERVER_BRAND;
 use crate::server_state::{
-    RenderedScoreboard, Scoreboard, ScoreboardPlaceholders, ServerCommand, ServerState, TabList,
-    Title, TitleType,
+    ConfigPlaceholders, RenderedScoreboard, Scoreboard, ScoreboardPlaceholders, ServerCommand,
+    ServerState, TabList, Title, TitleType,
 };
 use minecraft_packets::configuration::acknowledge_finish_configuration_packet::AcknowledgeConfigurationPacket;
 use minecraft_packets::login::Property;
@@ -288,9 +288,10 @@ pub fn send_play_packets(
         batch.queue(|| PacketRegistry::PlayClientBoundPluginMessage(packet));
     }
 
-    if let Some(component) = server_state.welcome_message() {
-        send_message(batch, component, protocol_version);
-    }
+    let username = client_state.get_username();
+    let placeholders = server_state.config_placeholders(&username);
+
+    send_welcome_message(batch, server_state, protocol_version, &placeholders)?;
 
     let ticks = server_state.time_world_ticks();
     let lock_time = server_state.is_time_locked();
@@ -299,15 +300,13 @@ pub fn send_play_packets(
 
     send_scoreboard_packets(batch, client_state, server_state)?;
 
-    if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
-        send_action_bar_packet(batch, server_state, protocol_version);
-        send_skin_packets(batch, client_state, server_state);
-        send_tab_list_packets(batch, server_state);
-        send_title_text_packets(batch, server_state, protocol_version);
-    }
-    if protocol_version.is_after_inclusive(ProtocolVersion::V1_9) {
-        send_boss_bar_packets(batch, server_state);
-    }
+    send_visual_packets(
+        batch,
+        client_state,
+        server_state,
+        protocol_version,
+        &placeholders,
+    )?;
 
     if let Some((center_chunk, chunk_packets)) = chunk_packets {
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_20_3) {
@@ -330,6 +329,40 @@ pub fn send_play_packets(
 
     finish_play_state(client_state);
 
+    Ok(())
+}
+
+fn send_visual_packets(
+    batch: &mut Batch<PacketRegistry>,
+    client_state: &ClientState,
+    server_state: &ServerState,
+    protocol_version: ProtocolVersion,
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
+    if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        send_action_bar_packet(batch, server_state, protocol_version, placeholders)?;
+        send_skin_packets(batch, client_state, server_state);
+        send_tab_list_packets(batch, server_state, placeholders)?;
+        send_title_text_packets(batch, server_state, protocol_version, placeholders)?;
+    }
+    if protocol_version.is_after_inclusive(ProtocolVersion::V1_9) {
+        send_boss_bar_packets(batch, server_state, placeholders)?;
+    }
+    Ok(())
+}
+
+fn send_welcome_message(
+    batch: &mut Batch<PacketRegistry>,
+    server_state: &ServerState,
+    protocol_version: ProtocolVersion,
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
+    if let Some(component) = server_state
+        .welcome_message(placeholders)
+        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?
+    {
+        send_message(batch, &component, protocol_version);
+    }
     Ok(())
 }
 
@@ -622,30 +655,42 @@ fn send_visibility_toggle_item_packet(
     batch.queue(|| PacketRegistry::SetContainerSlot(packet));
 }
 
-fn send_tab_list_packets(batch: &mut Batch<PacketRegistry>, server_state: &ServerState) {
+fn send_tab_list_packets(
+    batch: &mut Batch<PacketRegistry>,
+    server_state: &ServerState,
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
     if let Some(TabList { header, footer }) = server_state.tab_list() {
-        let packet = TabListPacket::new(header, footer);
+        let header = ServerState::render_config_component(header, placeholders)
+            .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+        let footer = ServerState::render_config_component(footer, placeholders)
+            .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+        let packet = TabListPacket::new(&header, &footer);
         batch.queue(|| PacketRegistry::TabList(packet));
     }
+    Ok(())
 }
 
-fn send_boss_bar_packets(batch: &mut Batch<PacketRegistry>, server_state: &ServerState) {
+fn send_boss_bar_packets(
+    batch: &mut Batch<PacketRegistry>,
+    server_state: &ServerState,
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
     if let Some(boss_bar) = server_state.boss_bar() {
-        let packet = BossBarPacket::add(
-            &boss_bar.title,
-            boss_bar.health,
-            boss_bar.color,
-            boss_bar.division,
-        );
+        let title = ServerState::render_config_component(&boss_bar.title, placeholders)
+            .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+        let packet = BossBarPacket::add(&title, boss_bar.health, boss_bar.color, boss_bar.division);
         batch.queue(|| PacketRegistry::BossBar(packet));
     }
+    Ok(())
 }
 
 fn send_title_text_packets(
     batch: &mut Batch<PacketRegistry>,
     server_state: &ServerState,
     protocol_version: ProtocolVersion,
-) {
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
     if let Some(Title {
         content,
         fade_in,
@@ -659,17 +704,25 @@ fn send_title_text_packets(
 
             match content {
                 TitleType::Title(title) => {
-                    let title_packet = SetTitleTextPacket::new(title);
+                    let title = ServerState::render_config_component(title, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let title_packet = SetTitleTextPacket::new(&title);
                     batch.queue(|| PacketRegistry::SetTitleText(title_packet));
                 }
                 TitleType::Subtitle(subtitle) => {
-                    let subtitle_packet = SetSubtitleTextPacket::new(subtitle);
+                    let subtitle = ServerState::render_config_component(subtitle, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let subtitle_packet = SetSubtitleTextPacket::new(&subtitle);
                     batch.queue(|| PacketRegistry::SetSubtitleText(subtitle_packet));
                 }
                 TitleType::Both { title, subtitle } => {
-                    let title_packet = SetTitleTextPacket::new(title);
+                    let title = ServerState::render_config_component(title, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let subtitle = ServerState::render_config_component(subtitle, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let title_packet = SetTitleTextPacket::new(&title);
                     batch.queue(|| PacketRegistry::SetTitleText(title_packet));
-                    let subtitle_packet = SetSubtitleTextPacket::new(subtitle);
+                    let subtitle_packet = SetSubtitleTextPacket::new(&subtitle);
                     batch.queue(|| PacketRegistry::SetSubtitleText(subtitle_packet));
                 }
             }
@@ -679,41 +732,55 @@ fn send_title_text_packets(
 
             match content {
                 TitleType::Title(title) => {
-                    let title_packet = LegacySetTitlePacket::set_title(title);
+                    let title = ServerState::render_config_component(title, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let title_packet = LegacySetTitlePacket::set_title(&title);
                     batch.queue(|| PacketRegistry::LegacySetTitle(title_packet));
                 }
                 TitleType::Subtitle(subtitle) => {
-                    let subtitle_packet = LegacySetTitlePacket::set_subtitle(subtitle);
+                    let subtitle = ServerState::render_config_component(subtitle, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let subtitle_packet = LegacySetTitlePacket::set_subtitle(&subtitle);
                     batch.queue(|| PacketRegistry::LegacySetTitle(subtitle_packet));
                 }
                 TitleType::Both { title, subtitle } => {
-                    let title_packet = LegacySetTitlePacket::set_title(title);
+                    let title = ServerState::render_config_component(title, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let subtitle = ServerState::render_config_component(subtitle, placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    let title_packet = LegacySetTitlePacket::set_title(&title);
                     batch.queue(|| PacketRegistry::LegacySetTitle(title_packet));
-                    let subtitle_packet = LegacySetTitlePacket::set_subtitle(subtitle);
+                    let subtitle_packet = LegacySetTitlePacket::set_subtitle(&subtitle);
                     batch.queue(|| PacketRegistry::LegacySetTitle(subtitle_packet));
                 }
             }
         }
     }
+    Ok(())
 }
 
 fn send_action_bar_packet(
     batch: &mut Batch<PacketRegistry>,
     server_state: &ServerState,
     protocol_version: ProtocolVersion,
-) {
-    if let Some(action_bar) = server_state.action_bar() {
+    placeholders: &ConfigPlaceholders<'_>,
+) -> Result<(), PacketHandlerError> {
+    if let Some(action_bar) = server_state
+        .action_bar(placeholders)
+        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?
+    {
         if protocol_version.is_after_inclusive(ProtocolVersion::V1_17) {
-            let packet = SetActionBarTextPacket::new(action_bar);
+            let packet = SetActionBarTextPacket::new(&action_bar);
             batch.queue(|| PacketRegistry::SetActionBarText(packet));
         } else if protocol_version.is_after_inclusive(ProtocolVersion::V1_11) {
-            let packet = LegacySetTitlePacket::action_bar(action_bar);
+            let packet = LegacySetTitlePacket::action_bar(&action_bar);
             batch.queue(|| PacketRegistry::LegacySetTitle(packet));
         } else {
-            let packet = LegacyChatMessagePacket::game_info(action_bar);
+            let packet = LegacyChatMessagePacket::game_info(&action_bar);
             batch.queue(|| PacketRegistry::LegacyChatMessage(packet));
         }
     }
+    Ok(())
 }
 
 fn send_skin_packets(

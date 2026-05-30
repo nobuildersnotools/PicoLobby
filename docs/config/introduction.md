@@ -27,3 +27,7 @@ PicoLimbo uses a simple TOML configuration file to manage all server settings. T
 ## Environment Variables
 
 You can use environment variable placeholders everywhere in the configuration file using the `${VARIABLE_NAME}` syntax.
+
+## Runtime Placeholders
+
+User-facing text templates can use `{player}`, `{online}`, `{max_players}`, and `{server}`. Unknown placeholders are left unchanged.

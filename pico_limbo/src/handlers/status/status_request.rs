@@ -29,10 +29,13 @@ impl PacketHandler for StatusRequestPacket {
                 )
             };
 
+        let motd = server_state
+            .motd()
+            .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
         let status_response = StatusResponse::new(
             version_string,
             version_number,
-            server_state.motd(),
+            &motd,
             server_state.online_players(),
             server_state.max_players(),
             server_state.fav_icon(),

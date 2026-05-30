@@ -19,12 +19,12 @@ impl PacketHandler for SetPlayerPositionAndRotationPacket {
         client_state: &mut ClientState,
         server_state: &ServerState,
     ) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
-        Ok(teleport_player_to_spawn_out_of_bounds(
+        teleport_player_to_spawn_out_of_bounds(
             client_state,
             server_state,
             (self.x, self.feet_y, self.z),
             Some((self.yaw, self.pitch)),
-        ))
+        )
     }
 }
 
@@ -33,7 +33,7 @@ pub fn teleport_player_to_spawn_out_of_bounds(
     server_state: &ServerState,
     position: (f64, f64, f64),
     rotation: Option<(f32, f32)>,
-) -> Batch<PacketRegistry> {
+) -> Result<Batch<PacketRegistry>, PacketHandlerError> {
     let mut batch = Batch::new();
     let previous_position = client_state.get_y_position();
     let old_position = client_state.position();
@@ -67,14 +67,18 @@ pub fn teleport_player_to_spawn_out_of_bounds(
                 teleport_player_to_spawn(client_state, server_state, &mut batch);
 
                 if let Some(content) = teleport_message {
-                    send_message(&mut batch, content, client_state.protocol_version());
+                    let username = client_state.get_username();
+                    let placeholders = server_state.config_placeholders(&username);
+                    let content = ServerState::render_config_component(content, &placeholders)
+                        .map_err(|err| PacketHandlerError::custom(&err.to_string()))?;
+                    send_message(&mut batch, &content, client_state.protocol_version());
                 }
             }
             // Whether or not the one-shot teleport fired, suppress the movement broadcast for
             // all below-min-y packets. Latency packets that arrive after the teleport still
             // report positions below min-y; broadcasting those would push observers below the
             // world and corrupt the lobby position base used for future relative deltas.
-            return batch;
+            return Ok(batch);
         }
     }
 
@@ -89,7 +93,7 @@ pub fn teleport_player_to_spawn_out_of_bounds(
     {
         client_state.set_pending_movement_plan(plan);
     }
-    batch
+    Ok(batch)
 }
 
 fn should_broadcast_movement(
@@ -166,7 +170,8 @@ mod tests {
             &server_state,
             (0.0, -1.0, 0.0),
             None,
-        );
+        )
+        .unwrap();
         let mut batch = batch.into_stream();
 
         // Then
@@ -193,7 +198,8 @@ mod tests {
             &server_state,
             (0.0, -1.0, 0.0),
             None,
-        );
+        )
+        .unwrap();
         let mut batch = batch.into_stream();
 
         // Then
@@ -216,7 +222,8 @@ mod tests {
             &server_state,
             (0.0, 10.0, 0.0),
             None,
-        );
+        )
+        .unwrap();
         let mut batch = batch.into_stream();
 
         // Then
@@ -238,6 +245,7 @@ mod tests {
             (0.0, STARTING_POSITION, 0.0),
             None,
         )
+        .unwrap()
         .into_stream();
 
         let mut stream2 = teleport_player_to_spawn_out_of_bounds(
@@ -246,6 +254,7 @@ mod tests {
             (0.0, STARTING_POSITION - FALL_SPEED, 0.0),
             None,
         )
+        .unwrap()
         .into_stream();
 
         let subsequent_streams = (2..=10).map(|i| {
@@ -259,6 +268,7 @@ mod tests {
                 ),
                 None,
             )
+            .unwrap()
             .into_stream()
         });
 

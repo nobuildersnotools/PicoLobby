@@ -74,29 +74,26 @@ pub struct MisconfiguredForwardingError;
 #[derive(Default)]
 pub struct Boundaries {
     pub min_y: i32,
-    pub teleport_message: Option<Component>,
+    pub teleport_message: Option<String>,
 }
 
 #[derive(Default)]
 pub struct TabList {
-    pub header: Component,
-    pub footer: Component,
+    pub header: String,
+    pub footer: String,
 }
 
 pub struct BossBar {
-    pub title: Component,
+    pub title: String,
     pub health: f32,
     pub color: BossBarColor,
     pub division: BossBarDivision,
 }
 
 pub enum TitleType {
-    Title(Component),
-    Subtitle(Component),
-    Both {
-        title: Component,
-        subtitle: Component,
-    },
+    Title(String),
+    Subtitle(String),
+    Both { title: String, subtitle: String },
 }
 
 pub struct Title {
@@ -125,6 +122,13 @@ pub struct ScoreboardPlaceholders<'a> {
     pub max_players: u32,
     pub server: &'a str,
 }
+
+pub type ConfigPlaceholders<'a> = ScoreboardPlaceholders<'a>;
+
+const DEFAULT_PLACEHOLDER_PLAYER: &str = "Player";
+const DEFAULT_PLACEHOLDER_ONLINE: u32 = 1;
+const DEFAULT_PLACEHOLDER_MAX_PLAYERS: u32 = 20;
+const DEFAULT_PLACEHOLDER_SERVER: &str = "lobby";
 
 impl Scoreboard {
     const MAX_LINES: usize = 15;
@@ -254,11 +258,11 @@ impl From<PrivateMessagesConfig> for PrivateMessageSettings {
 pub struct ServerState {
     forwarding_mode: ForwardingMode,
     spawn_dimension: Dimension,
-    motd: Component,
+    motd: String,
     time_world: i64,
     lock_time: bool,
     max_players: u32,
-    welcome_message: Option<Component>,
+    welcome_message: Option<String>,
     chat_antispam: ChatAntispamSettings,
     connected_clients: Arc<AtomicU32>,
     lobby_enabled: bool,
@@ -288,7 +292,7 @@ pub struct ServerState {
     compression_settings: Option<CompressionSettings>,
     title: Option<Title>,
     scoreboard: Option<Scoreboard>,
-    action_bar: Option<Component>,
+    action_bar: Option<String>,
     reduced_debug_info: bool,
     is_player_listed: bool,
     reply_to_status: bool,
@@ -330,16 +334,19 @@ impl ServerState {
         }
     }
 
-    pub const fn motd(&self) -> &Component {
-        &self.motd
+    pub fn motd(&self) -> Result<Component, MiniMessageError> {
+        Self::render_config_component(&self.motd, &self.config_placeholders(""))
     }
 
     pub const fn max_players(&self) -> u32 {
         self.max_players
     }
 
-    pub const fn welcome_message(&self) -> Option<&Component> {
-        self.welcome_message.as_ref()
+    pub fn welcome_message(
+        &self,
+        placeholders: &ConfigPlaceholders<'_>,
+    ) -> Result<Option<Component>, MiniMessageError> {
+        Self::render_optional_config_component(self.welcome_message.as_deref(), placeholders)
     }
 
     /// Returns the current number of connected clients.
@@ -431,8 +438,36 @@ impl ServerState {
         self.scoreboard.as_ref()
     }
 
-    pub const fn action_bar(&self) -> Option<&Component> {
-        self.action_bar.as_ref()
+    pub fn action_bar(
+        &self,
+        placeholders: &ConfigPlaceholders<'_>,
+    ) -> Result<Option<Component>, MiniMessageError> {
+        Self::render_optional_config_component(self.action_bar.as_deref(), placeholders)
+    }
+
+    pub fn config_placeholders<'a>(&self, player: &'a str) -> ConfigPlaceholders<'a> {
+        ConfigPlaceholders {
+            player,
+            online: self.online_players(),
+            max_players: self.max_players(),
+            server: DEFAULT_PLACEHOLDER_SERVER,
+        }
+    }
+
+    pub fn render_config_component(
+        content: &str,
+        placeholders: &ConfigPlaceholders<'_>,
+    ) -> Result<Component, MiniMessageError> {
+        parse_mini_message(&render_config_template(content, placeholders))
+    }
+
+    pub fn render_optional_config_component(
+        content: Option<&str>,
+        placeholders: &ConfigPlaceholders<'_>,
+    ) -> Result<Option<Component>, MiniMessageError> {
+        content
+            .map(|content| Self::render_config_component(content, placeholders))
+            .transpose()
     }
 
     pub const fn is_player_listed(&self) -> bool {
@@ -868,7 +903,7 @@ pub struct ServerStateBuilder {
     compression_settings: Option<CompressionSettings>,
     title: Option<Title>,
     scoreboard: Option<Scoreboard>,
-    action_bar: Option<Component>,
+    action_bar: Option<String>,
     reduced_debug_info: bool,
     is_player_listed: bool,
     reply_to_status: bool,
@@ -1005,7 +1040,7 @@ impl ServerStateBuilder {
     where
         S: AsRef<str>,
     {
-        self.action_bar = optional_mini_message(message.as_ref())?;
+        self.action_bar = optional_config_template(message.as_ref())?;
         Ok(self)
     }
 
@@ -1206,9 +1241,11 @@ impl ServerStateBuilder {
         header: &str,
         footer: &str,
     ) -> Result<&mut Self, ServerStateBuilderError> {
+        parse_config_template(header)?;
+        parse_config_template(footer)?;
         self.tab_list = Some(TabList {
-            header: parse_mini_message(header)?,
-            footer: parse_mini_message(footer)?,
+            header: header.to_string(),
+            footer: footer.to_string(),
         });
 
         Ok(self)
@@ -1222,7 +1259,7 @@ impl ServerStateBuilder {
     where
         S: AsRef<str>,
     {
-        let teleport_message = optional_mini_message(teleport_message.as_ref())?;
+        let teleport_message = optional_config_template(teleport_message.as_ref())?;
         self.boundaries = Some(Boundaries {
             min_y,
             teleport_message,
@@ -1270,9 +1307,9 @@ impl ServerStateBuilder {
         &mut self,
         boss_bar_config: EnabledBossBarConfig,
     ) -> Result<&mut Self, ServerStateBuilderError> {
-        let title = parse_mini_message(boss_bar_config.title.as_ref())?;
+        parse_config_template(boss_bar_config.title.as_ref())?;
         self.boss_bar = Some(BossBar {
-            title,
+            title: boss_bar_config.title,
             health: boss_bar_config.health.clamp(0.0, 1.0),
             color: boss_bar_config.color.into(),
             division: boss_bar_config.division.into(),
@@ -1289,8 +1326,8 @@ impl ServerStateBuilder {
         fade_out: i32,
     ) -> Result<&mut Self, ServerStateBuilderError> {
         let title_type = match (
-            optional_mini_message(title)?,
-            optional_mini_message(subtitle)?,
+            optional_config_template(title)?,
+            optional_config_template(subtitle)?,
         ) {
             (Some(title), Some(subtitle)) => Some(TitleType::Both { title, subtitle }),
             (Some(title), None) => Some(TitleType::Title(title)),
@@ -1364,11 +1401,11 @@ impl ServerStateBuilder {
         Ok(ServerState {
             forwarding_mode: self.forwarding_mode,
             spawn_dimension: self.dimension.unwrap_or_default(),
-            motd: parse_mini_message(&self.description_text)?,
+            motd: parse_config_template(&self.description_text)?,
             time_world: self.time_world,
             lock_time: self.lock_time,
             max_players: self.max_players,
-            welcome_message: optional_mini_message(&self.welcome_message)?,
+            welcome_message: optional_config_template(&self.welcome_message)?,
             chat_antispam: self.chat_antispam,
             action_bar: self.action_bar,
             connected_clients: Arc::new(AtomicU32::new(0)),
@@ -1415,13 +1452,14 @@ impl ServerStateBuilder {
     }
 }
 
-fn optional_mini_message(content: &str) -> Result<Option<Component>, MiniMessageError> {
-    let component = if content.is_empty() {
+fn optional_config_template(content: &str) -> Result<Option<String>, MiniMessageError> {
+    let template = if content.is_empty() {
         None
     } else {
-        Some(parse_mini_message(content)?)
+        parse_config_template(content)?;
+        Some(content.to_string())
     };
-    Ok(component)
+    Ok(template)
 }
 
 fn optional_lifecycle_template(content: &str) -> Result<Option<String>, MiniMessageError> {
@@ -1469,22 +1507,31 @@ fn validate_lobby_item(item_kind: &'static str, item: &str) -> Result<(), Server
     }
 }
 
-fn parse_scoreboard_template(content: &str) -> Result<Component, MiniMessageError> {
-    parse_mini_message(&render_scoreboard_template(
+fn parse_scoreboard_template(content: &str) -> Result<(), MiniMessageError> {
+    parse_config_template(content).map(|_| ())
+}
+
+fn parse_config_template(content: &str) -> Result<String, MiniMessageError> {
+    parse_mini_message(&render_config_template(
         content,
         &ScoreboardPlaceholders {
-            player: "Player",
-            online: 1,
-            max_players: 20,
-            server: "lobby",
+            player: DEFAULT_PLACEHOLDER_PLAYER,
+            online: DEFAULT_PLACEHOLDER_ONLINE,
+            max_players: DEFAULT_PLACEHOLDER_MAX_PLAYERS,
+            server: DEFAULT_PLACEHOLDER_SERVER,
         },
-    ))
+    ))?;
+    Ok(content.to_string())
 }
 
 pub fn render_scoreboard_template(
     content: &str,
     placeholders: &ScoreboardPlaceholders<'_>,
 ) -> String {
+    render_config_template(content, placeholders)
+}
+
+pub fn render_config_template(content: &str, placeholders: &ConfigPlaceholders<'_>) -> String {
     content
         .replace("{player}", placeholders.player)
         .replace("{online}", &placeholders.online.to_string())
@@ -1655,6 +1702,80 @@ mod tests {
         );
 
         assert_eq!(rendered, "Steve 3/20 lobby {unknown}");
+    }
+
+    #[test]
+    fn config_placeholders_render_outside_scoreboard_templates() {
+        let mut builder = ServerState::builder();
+        builder
+            .description_text("MOTD {online}/{max_players} {server}")
+            .welcome_message("Welcome {player}")
+            .action_bar("Online {online}")
+            .unwrap()
+            .max_players(20)
+            .show_online_player_count(true)
+            .tab_list("Hi {player}", "{online}/{max_players}")
+            .unwrap()
+            .title("Title {player}", "Server {server}", 10, 70, 20)
+            .unwrap()
+            .boundaries(0, "Back to spawn, {player}")
+            .unwrap();
+        let server_state = builder.build().unwrap();
+        server_state.increment();
+        server_state.increment();
+
+        let placeholders = server_state.config_placeholders("Alex");
+        let plain = |component: Component| component.to_legacy_text().replace("\u{00a7}r", "");
+
+        assert_eq!(plain(server_state.motd().unwrap()), "MOTD 2/20 lobby");
+        assert_eq!(
+            plain(
+                server_state
+                    .welcome_message(&placeholders)
+                    .unwrap()
+                    .unwrap()
+            ),
+            "Welcome Alex"
+        );
+        assert_eq!(
+            plain(server_state.action_bar(&placeholders).unwrap().unwrap()),
+            "Online 2"
+        );
+
+        let tab_list = server_state.tab_list().unwrap();
+        assert_eq!(
+            plain(ServerState::render_config_component(&tab_list.header, &placeholders).unwrap()),
+            "Hi Alex"
+        );
+        assert_eq!(
+            plain(ServerState::render_config_component(&tab_list.footer, &placeholders).unwrap()),
+            "2/20"
+        );
+
+        let title = server_state.title().unwrap();
+        let TitleType::Both { title, subtitle } = &title.content else {
+            panic!("expected title and subtitle");
+        };
+        assert_eq!(
+            plain(ServerState::render_config_component(title, &placeholders).unwrap()),
+            "Title Alex"
+        );
+        assert_eq!(
+            plain(ServerState::render_config_component(subtitle, &placeholders).unwrap()),
+            "Server lobby"
+        );
+
+        let boundaries = server_state.boundaries().unwrap();
+        assert_eq!(
+            plain(
+                ServerState::render_config_component(
+                    boundaries.teleport_message.as_deref().unwrap(),
+                    &placeholders,
+                )
+                .unwrap()
+            ),
+            "Back to spawn, Alex"
+        );
     }
 
     #[test]
