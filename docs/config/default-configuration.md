@@ -110,6 +110,9 @@ y = 320.0
 z = 4.0
 yaw = 180.0
 pitch = 0.0
+# Delay before hiding this NPC from older-client tab lists after spawn.
+# Set to 0 to keep this NPC listed for the whole session on those clients.
+tab_list_remove_delay_ms = 3000
 # Optional skin for the [[lobby.npcs]] entry above. Omit for the default skin.
 # Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
 # NPC spawns skinless without blocking startup.

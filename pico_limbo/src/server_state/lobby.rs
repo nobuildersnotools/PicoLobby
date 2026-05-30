@@ -2,6 +2,7 @@ use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct EntityId(i32);
@@ -157,6 +158,9 @@ pub struct LobbyNpc {
     pub kind: LobbyNpcKind,
     /// Optional skin textures. When `None` the NPC renders with the default skin.
     pub textures: Option<Property>,
+    /// Delay before removing the NPC's player-list entry on clients that cannot
+    /// use the modern `listed = false` flag.
+    pub tab_list_remove_delay: Option<Duration>,
 }
 
 impl LobbyNpc {
@@ -176,12 +180,19 @@ impl LobbyNpc {
             position,
             kind: LobbyNpcKind::Player,
             textures: None,
+            tab_list_remove_delay: None,
         }
     }
 
     #[must_use]
     pub fn with_textures(mut self, textures: Option<Property>) -> Self {
         self.textures = textures;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_tab_list_remove_delay(mut self, delay: Option<Duration>) -> Self {
+        self.tab_list_remove_delay = delay;
         self
     }
 }

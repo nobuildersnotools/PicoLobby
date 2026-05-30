@@ -509,6 +509,8 @@ fn lobby_heavy_config_toml() -> String {
             z: f64::from(index * 2),
             yaw: 180.0,
             pitch: 0.0,
+            tab_list_remove_delay_ms:
+                crate::configuration::lobby::DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS,
             skin: None,
         })
         .collect();

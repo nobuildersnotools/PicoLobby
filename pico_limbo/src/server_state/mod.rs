@@ -1127,6 +1127,10 @@ impl ServerStateBuilder {
                     LobbyPosition::new(cfg.x, cfg.y, cfg.z, cfg.yaw, cfg.pitch),
                 )
                 .with_textures(textures)
+                .with_tab_list_remove_delay(
+                    (cfg.tab_list_remove_delay_ms > 0)
+                        .then(|| Duration::from_millis(cfg.tab_list_remove_delay_ms)),
+                )
             })
             .collect::<Vec<_>>();
         LobbyState::validate_npcs(&npcs)?;
@@ -1860,6 +1864,8 @@ mod tests {
                     z: 0.0,
                     yaw: 180.0,
                     pitch: 0.0,
+                    tab_list_remove_delay_ms:
+                        crate::configuration::lobby::DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS,
                     skin: None,
                 }],
                 HashMap::new(),

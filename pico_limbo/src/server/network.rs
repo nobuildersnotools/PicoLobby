@@ -6,9 +6,9 @@ use crate::server::lobby_chat::{
     private_message_packets_for_plan,
 };
 use crate::server::lobby_visibility::{
-    join_visibility_batches_for_existing, join_visibility_packets_for_newcomer,
-    leave_visibility_batches, metadata_visibility_packets, movement_visibility_packets,
-    npc_spawn_packets_for_join, swing_visibility_packets,
+    delayed_npc_tab_list_remove_batches_for_join, join_visibility_batches_for_existing,
+    join_visibility_packets_for_newcomer, leave_visibility_batches, metadata_visibility_packets,
+    movement_visibility_packets, npc_spawn_packets_for_join, swing_visibility_packets,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
@@ -16,8 +16,9 @@ use crate::server::packet_registry::{
 };
 use crate::server::shutdown_signal::shutdown_signal;
 use crate::server_state::{
-    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyPrivateMessagePlan, LobbyRecipient,
-    LobbySessionId, LobbySwingPlan, RenderedScoreboard, ServerState,
+    LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpcSpawnPlan,
+    LobbyPrivateMessagePlan, LobbyRecipient, LobbySessionId, LobbySwingPlan, RenderedScoreboard,
+    ServerState,
 };
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
@@ -264,7 +265,14 @@ async fn process_packet(
     }
 
     if let Some(session_id) = join_session_id {
-        send_join_visibility(client_data, server_state, session_id, protocol_version).await?;
+        send_join_visibility(
+            client_data,
+            server_state,
+            session_id,
+            protocol_version,
+            broadcast_tx,
+        )
+        .await?;
         broadcast_join_message(server_state, session_id).await;
     }
 
@@ -290,6 +298,7 @@ async fn send_join_visibility(
     server_state: &Arc<RwLock<ServerState>>,
     session_id: LobbySessionId,
     newcomer_version: ProtocolVersion,
+    broadcast_tx: &mpsc::Sender<RawPacket>,
 ) -> Result<(), PacketProcessingError> {
     let server_state_guard = server_state.read().await;
     let Some(join_plan) = server_state_guard.plan_lobby_join(session_id) else {
@@ -328,6 +337,8 @@ async fn send_join_visibility(
                 }
             }
         }
+
+        schedule_delayed_npc_tab_list_removal(broadcast_tx, &npc_spawn_plan, newcomer_version);
     }
 
     let broadcast_batches = join_visibility_batches_for_existing(&join_plan);
@@ -365,6 +376,41 @@ async fn send_join_visibility(
     );
 
     Ok(())
+}
+
+fn schedule_delayed_npc_tab_list_removal(
+    broadcast_tx: &mpsc::Sender<RawPacket>,
+    npc_spawn_plan: &LobbyNpcSpawnPlan,
+    newcomer_version: ProtocolVersion,
+) {
+    for batch in delayed_npc_tab_list_remove_batches_for_join(npc_spawn_plan, newcomer_version) {
+        let raw_packets = batch
+            .packets
+            .into_iter()
+            .filter_map(|packet| match packet.encode_packet(newcomer_version) {
+                Ok(raw_packet) => Some(raw_packet),
+                Err(err) => {
+                    warn!(
+                        "Failed to encode delayed NPC tab-list removal packet for newcomer version {}: {}",
+                        newcomer_version.humanize(),
+                        err
+                    );
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        if raw_packets.is_empty() {
+            continue;
+        }
+
+        let broadcast_tx = broadcast_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(batch.delay).await;
+            for raw_packet in raw_packets {
+                queue_broadcast_packet(&broadcast_tx, raw_packet, "NPC tab-list removal");
+            }
+        });
+    }
 }
 
 async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<ServerState>>) {

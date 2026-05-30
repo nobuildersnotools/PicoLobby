@@ -25,6 +25,7 @@ pub const DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT: &str =
     "<red>You are sending messages too quickly.</red>";
 pub const DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE: &str =
     "<red>Private messages are only available in the lobby.</red>";
+pub const DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS: u64 = 3000;
 
 /// Default item shown for a selector entry when none is configured.
 pub const DEFAULT_SELECTOR_ENTRY_ITEM: &str = "minecraft:paper";
@@ -126,10 +127,19 @@ pub struct LobbyNpcConfig {
     pub yaw: f32,
     #[serde(default)]
     pub pitch: f32,
+    /// Delay before removing this NPC from tab lists on clients that need a
+    /// player list entry to load skins. Set to `0` to keep the NPC entry for the
+    /// whole session on those clients.
+    #[serde(default = "default_npc_tab_list_remove_delay_ms")]
+    pub tab_list_remove_delay_ms: u64,
     /// Optional skin applied to the NPC. When omitted the NPC renders with the
     /// default Steve/Alex skin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skin: Option<NpcSkinConfig>,
+}
+
+const fn default_npc_tab_list_remove_delay_ms() -> u64 {
+    DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS
 }
 
 /// How an NPC's skin is sourced.
@@ -247,6 +257,7 @@ impl Default for LobbyConfig {
                 z: 4.0,
                 yaw: 180.0,
                 pitch: 0.0,
+                tab_list_remove_delay_ms: DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS,
                 skin: None,
             }],
             private_messages: PrivateMessagesConfig::default(),
@@ -265,6 +276,16 @@ mod tests {
 
         assert_eq!(config.join_message, DEFAULT_JOIN_MESSAGE);
         assert_eq!(config.leave_message, DEFAULT_LEAVE_MESSAGE);
+    }
+
+    #[test]
+    fn default_lobby_config_delays_npc_tab_list_removal() {
+        let config = LobbyConfig::default();
+
+        assert_eq!(
+            config.npcs[0].tab_list_remove_delay_ms,
+            DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS
+        );
     }
 
     const NPC_BASE: &str =

@@ -21,10 +21,17 @@ use minecraft_packets::play::teleport_entity_packet::{
     EntityPositionSyncPacket, TeleportEntityPacket,
 };
 use minecraft_protocol::prelude::{ProtocolVersion, Uuid};
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 pub struct LobbyPacketBatch {
     #[allow(dead_code)]
     pub recipient: LobbyRecipient,
+    pub packets: Vec<PacketRegistry>,
+}
+
+pub struct DelayedNpcTabListRemoveBatch {
+    pub delay: Duration,
     pub packets: Vec<PacketRegistry>,
 }
 
@@ -348,17 +355,39 @@ pub fn npc_spawn_packets_for_join(
         .collect()
 }
 
+pub fn delayed_npc_tab_list_remove_batches_for_join(
+    plan: &LobbyNpcSpawnPlan,
+    recipient_version: ProtocolVersion,
+) -> Vec<DelayedNpcTabListRemoveBatch> {
+    if !recipient_version.between_inclusive(ProtocolVersion::V1_7_2, ProtocolVersion::V1_19_1) {
+        return Vec::new();
+    }
+
+    let mut packets_by_delay: BTreeMap<Duration, Vec<PacketRegistry>> = BTreeMap::new();
+    for npc in plan.npcs.iter() {
+        let Some(delay) = npc.tab_list_remove_delay else {
+            continue;
+        };
+        packets_by_delay
+            .entry(delay)
+            .or_default()
+            .push(npc_tab_list_remove_packet(npc, recipient_version));
+    }
+
+    packets_by_delay
+        .into_iter()
+        .map(|(delay, packets)| DelayedNpcTabListRemoveBatch { delay, packets })
+        .collect()
+}
+
 fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<PacketRegistry> {
     match npc.kind {
         LobbyNpcKind::Player => {}
     }
 
-    // NPCs keep their player-list entry for the whole session: the client loads
-    // a fake player's skin from that entry, and removing it (even a tick later)
-    // races against the skin being applied, leaving the NPC with the default
-    // Steve/Alex skin. On 1.19.3+ the entry is sent "unlisted" (`listed = false`)
-    // so the NPC stays out of the tab list; older clients have no such flag, so
-    // the NPC necessarily appears in the tab list there.
+    // The delayed tab-list removal path gives older clients a short window to
+    // load skins from this player-list entry before hiding the NPC from tab.
+    // On 1.19.3+ the entry is sent "unlisted" (`listed = false`) instead.
     let spawn = LobbySpawnInfo {
         uuid: npc.uuid,
         username: npc.name.clone(),
@@ -377,6 +406,19 @@ fn npc_spawn_packets(npc: &LobbyNpc, recipient_version: ProtocolVersion) -> Vec<
         player_spawn_packets_legacy(&spawn, recipient_version)
     } else {
         Vec::new()
+    }
+}
+
+fn npc_tab_list_remove_packet(
+    npc: &LobbyNpc,
+    recipient_version: ProtocolVersion,
+) -> PacketRegistry {
+    if recipient_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove(npc.uuid, npc.name.clone()))
+    } else {
+        PacketRegistry::PlayerInfoUpdate(PlayerInfoUpdatePacket::remove_legacy_name(
+            npc.name.clone(),
+        ))
     }
 }
 
@@ -1200,10 +1242,7 @@ mod tests {
     }
 
     #[test]
-    fn npc_spawn_never_removes_player_info_entry() {
-        // The NPC's player-list entry must persist for the whole session so the
-        // client can load its skin; removing it races the skin and drops the NPC
-        // to the default Steve/Alex skin. This held across every supported range.
+    fn npc_spawn_sends_player_info_before_entity_spawn() {
         for version in [
             ProtocolVersion::V1_8,
             ProtocolVersion::V1_9,
@@ -1224,6 +1263,41 @@ mod tests {
                     .any(|p| matches!(p, PacketRegistry::PlayerInfoRemove(_))),
                 "{version:?} must not remove the NPC player-list entry"
             );
+        }
+    }
+
+    #[test]
+    fn npc_delayed_tab_list_removal_only_targets_clients_without_listed_flag() {
+        for version in [
+            ProtocolVersion::V1_7_2,
+            ProtocolVersion::V1_8,
+            ProtocolVersion::V1_12_2,
+            ProtocolVersion::V1_19_1,
+        ] {
+            let batches = delayed_npc_tab_list_remove_batches_for_join(&npc_spawn_plan(), version);
+
+            assert_eq!(batches.len(), 1, "{version:?}");
+            assert_eq!(
+                batches[0].delay,
+                Duration::from_millis(
+                    crate::configuration::lobby::DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS
+                )
+            );
+            assert!(matches!(
+                batches[0].packets[0],
+                PacketRegistry::PlayerInfoUpdate(_)
+            ));
+        }
+
+        for version in [
+            ProtocolVersion::V1_19_3,
+            ProtocolVersion::V1_19_4,
+            ProtocolVersion::V1_20,
+            ProtocolVersion::V1_20_2,
+        ] {
+            let packets = delayed_npc_tab_list_remove_batches_for_join(&npc_spawn_plan(), version);
+
+            assert!(packets.is_empty(), "{version:?}");
         }
     }
 
@@ -1359,7 +1433,10 @@ mod tests {
             "Survival",
             LobbyPosition::new(1.0, 64.0, 2.0, 90.0, 0.0),
         )
-        .with_textures(textures);
+        .with_textures(textures)
+        .with_tab_list_remove_delay(Some(Duration::from_millis(
+            crate::configuration::lobby::DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS,
+        )));
         npc.entity_id = EntityId::new(300);
         LobbyNpcSpawnPlan {
             npcs: std::sync::Arc::from(vec![npc]),
