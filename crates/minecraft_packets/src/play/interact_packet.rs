@@ -26,7 +26,8 @@ impl InteractPacket {
 
     pub fn triggers_npc_interaction(&self) -> bool {
         match self.action {
-            InteractAction::Interact | InteractAction::InteractAt => self.hand.unwrap_or(0) == 0,
+            InteractAction::Interact => self.hand.unwrap_or(0) == 0,
+            InteractAction::InteractAt => false,
             InteractAction::Attack => true,
             InteractAction::Unknown(_) => false,
         }
@@ -139,7 +140,7 @@ mod tests {
         let mut reader = BinaryReader::new(&data);
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
         assert_eq!(packet.action(), InteractAction::InteractAt);
-        assert!(packet.triggers_npc_interaction());
+        assert!(!packet.triggers_npc_interaction());
         assert_eq!(packet.sneaking(), Some(true));
     }
 
@@ -152,6 +153,24 @@ mod tests {
         let mut reader = BinaryReader::new(&[0xac, 0x02, 1, 0]); // Attack
         let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_21).unwrap();
         assert_eq!(packet.action(), InteractAction::Attack);
+        assert!(packet.triggers_npc_interaction());
+    }
+
+    #[test]
+    fn legacy_right_click_sequence_triggers_once() {
+        let mut interact_at_data = vec![0xac, 0x02, 2];
+        interact_at_data.extend_from_slice(&1.0_f32.to_be_bytes());
+        interact_at_data.extend_from_slice(&2.0_f32.to_be_bytes());
+        interact_at_data.extend_from_slice(&3.0_f32.to_be_bytes());
+
+        let mut reader = BinaryReader::new(&interact_at_data);
+        let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_8).unwrap();
+        assert_eq!(packet.action(), InteractAction::InteractAt);
+        assert!(!packet.triggers_npc_interaction());
+
+        let mut reader = BinaryReader::new(&[0xac, 0x02, 0]);
+        let packet = InteractPacket::decode(&mut reader, ProtocolVersion::V1_8).unwrap();
+        assert_eq!(packet.action(), InteractAction::Interact);
         assert!(packet.triggers_npc_interaction());
     }
 }
