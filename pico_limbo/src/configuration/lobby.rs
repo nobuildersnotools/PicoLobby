@@ -26,6 +26,17 @@ pub const DEFAULT_PRIVATE_MESSAGE_RATE_LIMIT: &str =
 pub const DEFAULT_PRIVATE_MESSAGE_UNAVAILABLE: &str =
     "<red>Private messages are only available in the lobby.</red>";
 
+/// Default item shown for a selector entry when none is configured.
+pub const DEFAULT_SELECTOR_ENTRY_ITEM: &str = "minecraft:paper";
+
+fn default_selector_entry_item() -> String {
+    DEFAULT_SELECTOR_ENTRY_ITEM.to_string()
+}
+
+fn default_selector_entry_lore() -> Vec<String> {
+    vec!["<gray>Click to connect.".to_string()]
+}
+
 /// A downstream server reachable via the Velocity proxy.
 /// `server` must match a key in Velocity's `[servers]` block.
 #[derive(Serialize, Deserialize)]
@@ -34,6 +45,23 @@ pub struct LobbyServerEntry {
     pub id: String,
     pub display_name: String,
     pub server: String,
+    /// Item identifier rendered for this entry inside the selector GUI,
+    /// e.g. `"minecraft:grass_block"`. Defaults to `minecraft:paper`.
+    #[serde(default = "default_selector_entry_item")]
+    pub item: String,
+    /// Optional `MiniMessage` lore lines shown when hovering the entry.
+    /// Defaults to a single `Click to connect.` line.
+    #[serde(default = "default_selector_entry_lore")]
+    pub lore: Vec<String>,
+    /// Optional explicit GUI slot (0–26). When omitted the entry is placed in
+    /// the first free slot after any explicitly-placed entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slot: Option<u8>,
+    /// When `true`, the entry's item is rendered with the enchantment glint for
+    /// extra visual pop, without adding a visible enchantment to its tooltip.
+    /// Defaults to `false`.
+    #[serde(default)]
+    pub enchanted: bool,
 }
 
 /// Configuration for the per-player visibility toggle item in the hotbar.
@@ -194,6 +222,10 @@ impl Default for LobbyConfig {
                 id: "survival".to_string(),
                 display_name: "Survival".to_string(),
                 server: "survival".to_string(),
+                item: default_selector_entry_item(),
+                lore: default_selector_entry_lore(),
+                slot: None,
+                enchanted: false,
             }],
             selector: Some(SelectorItemConfig::default()),
             visibility_toggle: Some(VisibilityToggleConfig {

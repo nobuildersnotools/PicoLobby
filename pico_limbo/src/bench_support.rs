@@ -493,6 +493,10 @@ fn lobby_heavy_config_toml() -> String {
             id: format!("server-{index}"),
             display_name: format!("Server {index}"),
             server: format!("server-{index}"),
+            item: "minecraft:paper".to_string(),
+            lore: vec!["<gray>Click to connect.".to_string()],
+            slot: None,
+            enchanted: index % 2 == 0,
         })
         .collect();
     config.lobby.npcs = (0..16)

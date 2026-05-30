@@ -89,6 +89,11 @@ unavailable = "<red>Private messages are only available in the lobby.</red>"
 id = "survival"
 display_name = "Survival"
 server = "survival"
+# Optional per-entry overrides for how this server appears in the selector GUI:
+# item = "minecraft:grass_block"            # item shown in the menu (default: minecraft:paper)
+# lore = ["<gray>Click to connect."]        # MiniMessage hover lore
+# slot = 0                                   # explicit GUI slot 0–26 (default: auto-placed)
+# enchanted = true                           # render the item with the enchantment glint
 
 [lobby.selector]
 slot = 4

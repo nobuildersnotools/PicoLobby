@@ -169,7 +169,13 @@ fn apply_lobby_options(
     let lobby_destinations = lobby
         .servers
         .into_iter()
-        .map(|e| LobbyDestination::new(e.id, e.display_name, e.server))
+        .map(|e| {
+            LobbyDestination::new(e.id, e.display_name, e.server)
+                .with_item(e.item)
+                .with_lore(e.lore)
+                .with_slot(e.slot)
+                .with_enchanted(e.enchanted)
+        })
         .collect::<Vec<_>>();
 
     server_state_builder

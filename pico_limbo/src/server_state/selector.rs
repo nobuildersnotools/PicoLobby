@@ -1,4 +1,5 @@
 use crate::configuration::lobby::VisibilityToggleConfig;
+use crate::server_state::legacy_items::legacy_item;
 use crate::server_state::navigation::LobbyDestination;
 use minecraft_packets::play::LobbySlot;
 use minecraft_packets::play::click_container_packet::ClickContainerPacket;
@@ -14,8 +15,6 @@ pub struct LobbySelector {
     pub(crate) item_identifier: String,
     display_name: Option<Component>,
     lore: Vec<Component>,
-    /// Legacy pre-1.13 numeric item ID, if the item existed under that scheme.
-    legacy_item_id: Option<i32>,
 }
 
 impl LobbySelector {
@@ -23,8 +22,8 @@ impl LobbySelector {
     ///
     /// `item_identifier` must be a full Minecraft identifier such as
     /// `"minecraft:compass"`.  Item IDs are resolved from the precomputed
-    /// registry for each supported version bucket.  Pre-1.13 versions rely on a
-    /// small hardcoded table.
+    /// registry for each supported version bucket.  Pre-1.13 versions resolve
+    /// from the generated pre-Flattening table.
     ///
     /// # Errors
     /// Returns an error if any `MiniMessage` string fails to parse.
@@ -42,14 +41,11 @@ impl LobbySelector {
             .map(|s| parse_mini_message(s))
             .collect::<Result<_, _>>()?;
 
-        let legacy_item_id = legacy_item_id_for(&item_identifier);
-
         Ok(Self {
             hotbar_slot,
             item_identifier,
             display_name,
             lore,
-            legacy_item_id,
         })
     }
 
@@ -61,17 +57,10 @@ impl LobbySelector {
     /// item ID appropriate for `version`.  Returns `None` if the item is
     /// unknown for that version.
     pub fn build_hotbar_packet(&self, version: ProtocolVersion) -> Option<SetContainerSlotPacket> {
-        let item_id = self.resolve_item_id(version)?;
-        let slot = LobbySlot::new(item_id, 1, self.display_name.clone(), self.lore.clone());
+        let (item_id, damage) = resolve_item(&self.item_identifier, version)?;
+        let slot = LobbySlot::new(item_id, 1, self.display_name.clone(), self.lore.clone())
+            .with_legacy_damage(damage);
         Some(SetContainerSlotPacket::hotbar(self.hotbar_slot, slot))
-    }
-
-    /// Returns the protocol item ID for `version`, or `None` if unknown.
-    pub fn resolve_item_id(&self, version: ProtocolVersion) -> Option<i32> {
-        if version.is_before_inclusive(ProtocolVersion::V1_12_2) {
-            return self.legacy_item_id;
-        }
-        PrecomputedRegistries::new(version).resolve_item_id(&self.item_identifier)
     }
 }
 
@@ -86,7 +75,6 @@ pub struct LobbyVisibilityToggle {
     lore_off: Vec<Component>,
     pub message_on: Option<String>,
     pub message_off: Option<String>,
-    legacy_item_id: Option<i32>,
 }
 
 impl LobbyVisibilityToggle {
@@ -96,7 +84,6 @@ impl LobbyVisibilityToggle {
     /// Returns an error if any `MiniMessage` string fails to parse.
     pub fn new(config: VisibilityToggleConfig) -> Result<Self, MiniMessageError> {
         let item_identifier = config.item;
-        let legacy_item_id = legacy_item_id_for(&item_identifier);
 
         let display_name_on = config
             .display_name_on
@@ -128,16 +115,7 @@ impl LobbyVisibilityToggle {
             lore_off,
             message_on: config.message_on,
             message_off: config.message_off,
-            legacy_item_id,
         })
-    }
-
-    /// Returns the protocol item ID for `version`, or `None` if unknown.
-    pub fn resolve_item_id(&self, version: ProtocolVersion) -> Option<i32> {
-        if version.is_before_inclusive(ProtocolVersion::V1_12_2) {
-            return self.legacy_item_id;
-        }
-        PrecomputedRegistries::new(version).resolve_item_id(&self.item_identifier)
     }
 
     /// Builds a `SetContainerSlotPacket` for the player's hotbar reflecting the
@@ -147,13 +125,13 @@ impl LobbyVisibilityToggle {
         players_visible: bool,
         version: ProtocolVersion,
     ) -> Option<SetContainerSlotPacket> {
-        let item_id = self.resolve_item_id(version)?;
+        let (item_id, damage) = resolve_item(&self.item_identifier, version)?;
         let (display_name, lore) = if players_visible {
             (self.display_name_on.clone(), self.lore_on.clone())
         } else {
             (self.display_name_off.clone(), self.lore_off.clone())
         };
-        let slot = LobbySlot::new(item_id, 1, display_name, lore);
+        let slot = LobbySlot::new(item_id, 1, display_name, lore).with_legacy_damage(damage);
         Some(SetContainerSlotPacket::hotbar(self.hotbar_slot, slot))
     }
 
@@ -224,11 +202,17 @@ impl OpenSelectorState {
     }
 }
 
-const MENU_SIZE: usize = 27;
+/// Number of slots in the selector GUI (a single 27-slot chest).
+pub const MENU_SIZE: usize = 27;
 
 /// Builds the initial `OpenSelectorState` for a player opening the selector
-/// menu.  Destinations fill slots 0, 1, 2, … up to 27; remaining slots are
-/// empty.  All item IDs are resolved for `version`.
+/// menu.
+///
+/// Each destination renders its configured item and lore. Entries with an
+/// explicit `slot` are placed first; entries without one fill the remaining
+/// free slots in order. Per-entry items that are unknown for `version` fall
+/// back to paper so the entry still appears. Entries that cannot be placed
+/// (out of range or colliding) and overflow past 27 slots are skipped.
 pub fn build_selector_menu(
     window_id: u8,
     destinations: &[LobbyDestination],
@@ -236,21 +220,35 @@ pub fn build_selector_menu(
 ) -> OpenSelectorState {
     let paper_id = resolve_paper_id(version);
 
-    let mut slots = Vec::with_capacity(MENU_SIZE);
-    let mut slot_map = vec![None; MENU_SIZE];
+    let mut slots = vec![LobbySlot::empty(); MENU_SIZE];
+    let mut slot_map: Vec<Option<String>> = vec![None; MENU_SIZE];
 
-    for (i, dest) in destinations.iter().take(MENU_SIZE).enumerate() {
-        let display = parse_mini_message(&dest.display_name).ok();
-        let lore = parse_mini_message("<gray>Click to connect.")
-            .ok()
-            .into_iter()
-            .collect();
-        slots.push(LobbySlot::new(paper_id, 1, display, lore));
-        slot_map[i] = Some(dest.id.0.clone());
+    // First pass: entries with an explicit, in-range, unoccupied slot.
+    for dest in destinations {
+        if let Some(slot) = dest.slot
+            && slot < MENU_SIZE
+            && slot_map[slot].is_none()
+        {
+            slots[slot] = build_destination_slot(dest, version, paper_id);
+            slot_map[slot] = Some(dest.id.0.clone());
+        }
     }
 
-    while slots.len() < MENU_SIZE {
-        slots.push(LobbySlot::empty());
+    // Second pass: auto-placed entries fill the first free slot in order.
+    let mut next_free = 0usize;
+    for dest in destinations {
+        if dest.slot.is_some() {
+            continue;
+        }
+        while next_free < MENU_SIZE && slot_map[next_free].is_some() {
+            next_free += 1;
+        }
+        if next_free >= MENU_SIZE {
+            break;
+        }
+        slots[next_free] = build_destination_slot(dest, version, paper_id);
+        slot_map[next_free] = Some(dest.id.0.clone());
+        next_free += 1;
     }
 
     OpenSelectorState {
@@ -261,39 +259,41 @@ pub fn build_selector_menu(
     }
 }
 
-fn resolve_paper_id(version: ProtocolVersion) -> i32 {
+/// Builds the version-resolved item stack for a single selector entry.
+fn build_destination_slot(
+    dest: &LobbyDestination,
+    version: ProtocolVersion,
+    paper_id: i32,
+) -> LobbySlot {
+    let (item_id, damage) = resolve_item(&dest.item, version).unwrap_or((paper_id, 0));
+    let display = parse_mini_message(&dest.display_name).ok();
+    let lore = dest
+        .lore
+        .iter()
+        .filter_map(|line| parse_mini_message(line).ok())
+        .collect();
+    LobbySlot::new(item_id, 1, display, lore)
+        .with_legacy_damage(damage)
+        .with_glint(dest.enchanted)
+}
+
+/// Resolves the protocol item ID and legacy metadata/damage for `identifier` on
+/// `version`. Pre-1.13 clients use the generated pre-Flattening table (which
+/// carries a metadata value for variant items such as coloured wool); 1.13+
+/// clients use the precomputed registry and always report metadata `0`.
+/// Returns `None` if the item is unknown for that version.
+pub fn resolve_item(identifier: &str, version: ProtocolVersion) -> Option<(i32, i16)> {
     if version.is_before_inclusive(ProtocolVersion::V1_12_2) {
-        339 // pre-1.13 numeric ID for paper
+        legacy_item(identifier).map(|(id, meta)| (i32::from(id), meta))
     } else {
         PrecomputedRegistries::new(version)
-            .resolve_item_id("minecraft:paper")
-            .unwrap_or(339)
+            .resolve_item_id(identifier)
+            .map(|id| (id, 0))
     }
 }
 
-/// Hardcoded numeric item IDs for common selector items in pre-1.13 clients.
-/// These are the Java item IDs from before the 1.13 flattening.
-fn legacy_item_id_for(identifier: &str) -> Option<i32> {
-    let id = match identifier {
-        "minecraft:compass" => 345,
-        "minecraft:clock" => 347,
-        "minecraft:nether_star" => 399,
-        "minecraft:paper" => 339,
-        "minecraft:book" => 340,
-        "minecraft:written_book" => 387,
-        "minecraft:map" | "minecraft:filled_map" => 395,
-        "minecraft:ender_pearl" => 368,
-        "minecraft:ender_eye" => 381,
-        "minecraft:glass" => 20,
-        "minecraft:slime_ball" => 341,
-        "minecraft:blaze_rod" => 369,
-        "minecraft:diamond" => 264,
-        "minecraft:emerald" => 388,
-        "minecraft:gold_ingot" => 266,
-        "minecraft:iron_ingot" => 265,
-        _ => return None,
-    };
-    Some(id)
+fn resolve_paper_id(version: ProtocolVersion) -> i32 {
+    resolve_item("minecraft:paper", version).map_or(339, |(id, _)| id)
 }
 
 #[cfg(test)]
@@ -306,7 +306,6 @@ mod tests {
 
     #[test]
     fn compass_id_per_version_bucket() {
-        let sel = selector("minecraft:compass");
         for (version, expected) in [
             (ProtocolVersion::V1_12_2, 345), // pre-1.13 legacy numeric
             (ProtocolVersion::V1_13, 562),
@@ -324,7 +323,7 @@ mod tests {
             (ProtocolVersion::V1_21_6, 989),
         ] {
             assert_eq!(
-                sel.resolve_item_id(version),
+                resolve_item("minecraft:compass", version).map(|(id, _)| id),
                 Some(expected),
                 "{version:?} compass = {expected}"
             );
@@ -333,14 +332,13 @@ mod tests {
 
     #[test]
     fn item_absent_from_missing_registry_version_returns_none() {
-        let sel = selector("minecraft:netherite_chestplate");
-        assert_eq!(sel.resolve_item_id(ProtocolVersion::V1_15_2), None);
+        assert!(resolve_item("minecraft:netherite_chestplate", ProtocolVersion::V1_15_2).is_none());
     }
 
     #[test]
     fn hotbar_packet_reflects_item_resolution() {
         let unknown = selector("minecraft:unknown_item_xyz");
-        assert!(unknown.resolve_item_id(ProtocolVersion::V1_21).is_none());
+        assert!(resolve_item("minecraft:unknown_item_xyz", ProtocolVersion::V1_21).is_none());
         assert!(
             unknown
                 .build_hotbar_packet(ProtocolVersion::V1_21)
@@ -374,6 +372,86 @@ mod tests {
             assert!(state.slot_map[i].is_none());
             assert_eq!(state.slots[i].item_id(), -1);
         }
+    }
+
+    #[test]
+    fn pre_1_13_item_resolves_with_legacy_id_and_metadata() {
+        // diamond_pickaxe is a non-variant item: legacy id 278, metadata 0.
+        assert_eq!(
+            resolve_item("minecraft:diamond_pickaxe", ProtocolVersion::V1_8),
+            Some((278, 0))
+        );
+        // red_wool is a variant item: legacy id 35, metadata 14.
+        assert_eq!(
+            resolve_item("minecraft:red_wool", ProtocolVersion::V1_8),
+            Some((35, 14))
+        );
+        // 1.13+ clients resolve the flattened id and never report metadata.
+        let (modern_id, modern_meta) =
+            resolve_item("minecraft:red_wool", ProtocolVersion::V1_21).unwrap();
+        assert_eq!(modern_meta, 0);
+        assert_ne!(modern_id, 35);
+    }
+
+    #[test]
+    fn explicit_slots_are_honoured_and_auto_entries_skip_them() {
+        let dests = vec![
+            dest("auto-a"),
+            dest("pinned").with_slot(Some(0)),
+            dest("auto-b"),
+        ];
+        let state = build_selector_menu(1, &dests, ProtocolVersion::V1_21);
+
+        // The pinned entry claims slot 0; auto entries fill around it in order.
+        assert_eq!(state.slot_map[0], Some("pinned".to_string()));
+        assert_eq!(state.slot_map[1], Some("auto-a".to_string()));
+        assert_eq!(state.slot_map[2], Some("auto-b".to_string()));
+    }
+
+    #[test]
+    fn per_entry_item_overrides_default_paper() {
+        let version = ProtocolVersion::V1_21;
+        let (paper, _) = resolve_item("minecraft:paper", version).unwrap();
+        let (compass, _) = resolve_item("minecraft:compass", version).unwrap();
+        assert_ne!(paper, compass);
+
+        let dests = vec![dest("a").with_item("minecraft:compass"), dest("b")];
+        let state = build_selector_menu(1, &dests, version);
+
+        assert_eq!(state.slots[0].item_id(), compass);
+        assert_eq!(state.slots[1].item_id(), paper);
+    }
+
+    #[test]
+    fn enchanted_entry_encodes_glint_component() {
+        // An enchanted entry should attach the 1.20.5+ glint override component;
+        // a plain entry should not. Compare the structured wire encodings.
+        use minecraft_protocol::prelude::{BinaryWriter, EncodePacket};
+
+        let version = ProtocolVersion::V1_21;
+        let plain = build_selector_menu(1, &[dest("a")], version);
+        let glinted = build_selector_menu(1, &[dest("a").with_enchanted(true)], version);
+
+        let encode = |slot: &LobbySlot| {
+            let mut writer = BinaryWriter::default();
+            slot.encode(&mut writer, version).expect("encode");
+            writer.as_slice().to_vec()
+        };
+
+        // The glinted slot carries one extra component (id 18 + bool true).
+        assert!(encode(&glinted.slots[0]).len() > encode(&plain.slots[0]).len());
+        assert!(encode(&glinted.slots[0]).ends_with(&[0x12, 0x01]));
+    }
+
+    #[test]
+    fn unknown_per_entry_item_falls_back_to_paper() {
+        let version = ProtocolVersion::V1_21;
+        let (paper, _) = resolve_item("minecraft:paper", version).unwrap();
+
+        let dests = vec![dest("a").with_item("minecraft:not_a_real_item")];
+        let state = build_selector_menu(1, &dests, version);
+
+        assert_eq!(state.slots[0].item_id(), paper);
     }
 
     fn make_click(slot: i16, button: u8, mode: u8, state_id: i32) -> ClickContainerPacket {
@@ -484,10 +562,11 @@ mod tests {
 
     #[test]
     fn visibility_toggle_ender_eye_legacy_id() {
-        let toggle = LobbyVisibilityToggle::new(visibility_toggle_config("minecraft:ender_eye"))
-            .expect("valid toggle");
-        assert_eq!(toggle.resolve_item_id(ProtocolVersion::V1_12_2), Some(381));
-        assert!(toggle.resolve_item_id(ProtocolVersion::V1_21).is_some());
+        assert_eq!(
+            resolve_item("minecraft:ender_eye", ProtocolVersion::V1_12_2),
+            Some((381, 0))
+        );
+        assert!(resolve_item("minecraft:ender_eye", ProtocolVersion::V1_21).is_some());
     }
 
     #[test]

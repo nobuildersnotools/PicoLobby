@@ -16,6 +16,15 @@ pub struct LobbySlot {
     count: u8,
     display_name: Option<Component>,
     lore: Vec<Component>,
+    /// Pre-1.13 metadata/damage value distinguishing item variants (e.g.
+    /// coloured wool).  Only encoded for clients before 1.13; ignored on the
+    /// flattened (1.13+) wire formats, which identify variants by item id.
+    legacy_damage: i16,
+    /// When `true`, the item is rendered with the enchantment glint regardless
+    /// of whether it carries a "real" enchantment. Pre-1.20.5 this is achieved
+    /// by attaching a hidden dummy enchantment; 1.20.5+ uses the dedicated
+    /// `enchantment_glint_override` data component.
+    glint: bool,
 }
 
 impl LobbySlot {
@@ -27,6 +36,8 @@ impl LobbySlot {
             count: 0,
             display_name: None,
             lore: Vec::new(),
+            legacy_damage: 0,
+            glint: false,
         }
     }
 
@@ -43,7 +54,25 @@ impl LobbySlot {
             count,
             display_name,
             lore,
+            legacy_damage: 0,
+            glint: false,
         }
+    }
+
+    /// Sets the pre-1.13 metadata/damage value used to select item variants on
+    /// clients before the 1.13 Flattening.
+    #[must_use]
+    pub const fn with_legacy_damage(mut self, legacy_damage: i16) -> Self {
+        self.legacy_damage = legacy_damage;
+        self
+    }
+
+    /// Forces the enchantment glint to render on this slot without adding a
+    /// visible enchantment to the tooltip.
+    #[must_use]
+    pub const fn with_glint(mut self, glint: bool) -> Self {
+        self.glint = glint;
+        self
     }
 
     pub const fn item_id(&self) -> i32 {
@@ -88,7 +117,8 @@ fn encode_structured(
     VarInt::new(i32::from(slot.count)).encode(writer, version)?;
     VarInt::new(slot.item_id).encode(writer, version)?;
 
-    let add_count = slot.display_name.is_some() as i32 + (!slot.lore.is_empty()) as i32;
+    let add_count =
+        slot.display_name.is_some() as i32 + (!slot.lore.is_empty()) as i32 + slot.glint as i32;
     VarInt::new(add_count).encode(writer, version)?;
     VarInt::new(0).encode(writer, version)?; // remove count
 
@@ -105,6 +135,12 @@ fn encode_structured(
         for line in &slot.lore {
             line.to_nbt().encode(writer, version)?;
         }
+    }
+
+    if slot.glint {
+        VarInt::new(glint_override_component_id(version)).encode(writer, version)?;
+        // enchantment_glint_override data: a single boolean.
+        true.encode(writer, version)?;
     }
 
     Ok(())
@@ -125,6 +161,22 @@ fn lore_component_id(version: ProtocolVersion) -> i32 {
         8
     } else {
         7
+    }
+}
+
+/// Protocol ID of the `minecraft:enchantment_glint_override` data component.
+/// The component-type registry was re-ordered several times across 1.21.x, so
+/// the id is non-monotonic: 1.20.5–1.21.1 and 1.21.5–1.21.10 use 18, the
+/// 1.21.2–1.21.4 range bumped it to 19, and 1.21.11+ uses 21.
+fn glint_override_component_id(version: ProtocolVersion) -> i32 {
+    if version.is_after_inclusive(ProtocolVersion::V1_21_11) {
+        21
+    } else if version.is_after_inclusive(ProtocolVersion::V1_21_5) {
+        18
+    } else if version.is_after_inclusive(ProtocolVersion::V1_21_2) {
+        19
+    } else {
+        18
     }
 }
 
@@ -151,7 +203,7 @@ fn encode_opt_nbt_modern(
     writer: &mut BinaryWriter,
     version: ProtocolVersion,
 ) -> Result<(), BinaryWriterError> {
-    let nbt = build_display_nbt_modern(&slot.display_name, &slot.lore, version);
+    let nbt = build_display_nbt_modern(&slot.display_name, &slot.lore, slot.glint, version);
     if let Some(nbt) = nbt {
         nbt.encode(writer, version)?;
     } else {
@@ -165,9 +217,14 @@ fn encode_opt_nbt_modern(
 ///
 /// Item names are JSON text components throughout this range. Lore is legacy
 /// formatted text on 1.13.x, then JSON text components from 1.14 onward.
+///
+/// When `glint` is set, a dummy `Enchantments` entry is attached to force the
+/// enchantment glint, and `HideFlags` bit `0x1` hides the enchantment line from
+/// the tooltip so only the visual glint remains.
 fn build_display_nbt_modern(
     display_name: &Option<Component>,
     lore: &[Component],
+    glint: bool,
     version: ProtocolVersion,
 ) -> Option<Value> {
     let mut display: IndexMap<String, Value> = IndexMap::new();
@@ -187,12 +244,32 @@ fn build_display_nbt_modern(
         display.insert("Lore".to_string(), Value::List(lore_values));
     }
 
-    if display.is_empty() {
+    let mut tag: IndexMap<String, Value> = IndexMap::new();
+
+    if !display.is_empty() {
+        tag.insert("display".to_string(), Value::Compound(display));
+    }
+
+    if glint {
+        // 1.13+ enchantments are a list of {id: <namespaced string>, lvl: short}.
+        let mut enchant: IndexMap<String, Value> = IndexMap::new();
+        enchant.insert(
+            "id".to_string(),
+            Value::String("minecraft:unbreaking".to_string()),
+        );
+        enchant.insert("lvl".to_string(), Value::Short(1));
+        tag.insert(
+            "Enchantments".to_string(),
+            Value::List(vec![Value::Compound(enchant)]),
+        );
+        // HideFlags bit 0x1 hides the enchantment tooltip line, keeping the glint.
+        tag.insert("HideFlags".to_string(), Value::Int(1));
+    }
+
+    if tag.is_empty() {
         return None;
     }
 
-    let mut tag: IndexMap<String, Value> = IndexMap::new();
-    tag.insert("display".to_string(), Value::Compound(display));
     Some(Value::Compound(tag))
 }
 
@@ -227,7 +304,7 @@ fn encode_legacy_short(
 
     (slot.item_id as i16).encode(writer, version)?;
     (slot.count as i8).encode(writer, version)?;
-    (0i16).encode(writer, version)?; // damage / meta
+    slot.legacy_damage.encode(writer, version)?; // damage / meta
     encode_opt_nbt_legacy(slot, writer, version)
 }
 
@@ -236,7 +313,7 @@ fn encode_opt_nbt_legacy(
     writer: &mut BinaryWriter,
     version: ProtocolVersion,
 ) -> Result<(), BinaryWriterError> {
-    let nbt = build_display_nbt_legacy(&slot.display_name, &slot.lore);
+    let nbt = build_display_nbt_legacy(&slot.display_name, &slot.lore, slot.glint);
     if let Some(nbt) = nbt {
         nbt.encode(writer, version)?;
     } else {
@@ -246,7 +323,15 @@ fn encode_opt_nbt_legacy(
 }
 
 /// Builds `{display: {Name: "<legacy text>", Lore: ["<legacy text>", ...]}}` for pre-1.13.
-fn build_display_nbt_legacy(display_name: &Option<Component>, lore: &[Component]) -> Option<Value> {
+///
+/// When `glint` is set, a dummy `ench` entry forces the enchantment glint and
+/// `HideFlags` bit `0x1` hides the enchantment tooltip line (1.8+; on 1.7.x
+/// `HideFlags` is ignored and the dummy enchantment line shows).
+fn build_display_nbt_legacy(
+    display_name: &Option<Component>,
+    lore: &[Component],
+    glint: bool,
+) -> Option<Value> {
     let mut display: IndexMap<String, Value> = IndexMap::new();
 
     if let Some(name) = display_name {
@@ -262,12 +347,29 @@ fn build_display_nbt_legacy(display_name: &Option<Component>, lore: &[Component]
         display.insert("Lore".to_string(), Value::List(lore_values));
     }
 
-    if display.is_empty() {
+    let mut tag: IndexMap<String, Value> = IndexMap::new();
+
+    if !display.is_empty() {
+        tag.insert("display".to_string(), Value::Compound(display));
+    }
+
+    if glint {
+        // Pre-1.13 enchantments are a list of {id: short, lvl: short}; id 0 is
+        // Protection. The value is irrelevant — any entry triggers the glint.
+        let mut enchant: IndexMap<String, Value> = IndexMap::new();
+        enchant.insert("id".to_string(), Value::Short(0));
+        enchant.insert("lvl".to_string(), Value::Short(1));
+        tag.insert(
+            "ench".to_string(),
+            Value::List(vec![Value::Compound(enchant)]),
+        );
+        tag.insert("HideFlags".to_string(), Value::Int(1));
+    }
+
+    if tag.is_empty() {
         return None;
     }
 
-    let mut tag: IndexMap<String, Value> = IndexMap::new();
-    tag.insert("display".to_string(), Value::Compound(display));
     Some(Value::Compound(tag))
 }
 
@@ -308,6 +410,72 @@ mod tests {
     }
 
     #[test]
+    fn glint_structured_appends_glint_override_component() {
+        // 1.21: count 1, item 888, add_count 1, remove 0, glint id 18, bool true.
+        let bytes = encode(
+            &LobbySlot::new(888, 1, None, Vec::new()).with_glint(true),
+            ProtocolVersion::V1_21,
+        );
+        assert_eq!(bytes, &[0x01, 0xF8, 0x06, 0x01, 0x00, 0x12, 0x01]);
+
+        // 1.21.2 re-ordered the registry: glint override is id 19.
+        let bytes = encode(
+            &LobbySlot::new(888, 1, None, Vec::new()).with_glint(true),
+            ProtocolVersion::V1_21_2,
+        );
+        assert_eq!(bytes, &[0x01, 0xF8, 0x06, 0x01, 0x00, 0x13, 0x01]);
+    }
+
+    #[test]
+    fn glint_override_component_id_per_bucket() {
+        for (version, expected) in [
+            (ProtocolVersion::V1_20_5, 18),
+            (ProtocolVersion::V1_21, 18),
+            (ProtocolVersion::V1_21_2, 19),
+            (ProtocolVersion::V1_21_5, 18),
+            (ProtocolVersion::V1_21_9, 18),
+            (ProtocolVersion::V1_21_11, 21),
+        ] {
+            assert_eq!(
+                glint_override_component_id(version),
+                expected,
+                "{version:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn glint_modern_nbt_adds_hidden_dummy_enchantment() {
+        // 1.13.2–1.20.4: glint is faked with an Enchantments list + HideFlags.
+        let nbt = build_display_nbt_modern(&None, &[], true, ProtocolVersion::V1_20).unwrap();
+        let root = nbt.get_compound().expect("root compound");
+        assert!(root.get("display").is_none(), "no display data expected");
+        assert_eq!(root.get("HideFlags").and_then(Value::get_int), Some(1));
+        let ench = root.get("Enchantments").and_then(Value::get_list).unwrap();
+        let entry = ench[0].get_compound().unwrap();
+        assert_eq!(
+            entry.get("id").and_then(Value::get_str),
+            Some("minecraft:unbreaking")
+        );
+
+        // Without glint and without display data, no NBT is produced.
+        assert!(build_display_nbt_modern(&None, &[], false, ProtocolVersion::V1_20).is_none());
+    }
+
+    #[test]
+    fn glint_legacy_nbt_adds_hidden_dummy_enchantment() {
+        // Pre-1.13: glint uses the numeric `ench` list + HideFlags.
+        let nbt = build_display_nbt_legacy(&None, &[], true).unwrap();
+        let root = nbt.get_compound().expect("root compound");
+        assert_eq!(root.get("HideFlags").and_then(Value::get_int), Some(1));
+        let ench = root.get("ench").and_then(Value::get_list).unwrap();
+        let entry = ench[0].get_compound().unwrap();
+        assert_eq!(entry.get("id").and_then(Value::get_short), Some(0));
+
+        assert!(build_display_nbt_legacy(&None, &[], false).is_none());
+    }
+
+    #[test]
     fn non_empty_slot_pre_1_13_encodes_short_id_and_damage() {
         // compass ID 345 = 0x0159; damage field is always 0.
         let bytes = encode(
@@ -315,6 +483,29 @@ mod tests {
             ProtocolVersion::V1_12_2,
         );
         assert_eq!(&bytes[..6], &[0x01, 0x59, 0x01, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn non_empty_slot_pre_1_13_encodes_variant_metadata_as_damage() {
+        // Red wool: item 35 = 0x0023, count 1, metadata 14 = 0x000E in the
+        // pre-Flattening damage field. NBT byte 0x00 (no display data).
+        let bytes = encode(
+            &LobbySlot::new(35, 1, None, Vec::new()).with_legacy_damage(14),
+            ProtocolVersion::V1_12_2,
+        );
+        assert_eq!(&bytes[..6], &[0x00, 0x23, 0x01, 0x00, 0x0E, 0x00]);
+    }
+
+    #[test]
+    fn legacy_damage_is_ignored_on_flattened_wire_formats() {
+        // 1.13+ identifies variants by item id, so the damage value never
+        // appears on the wire.
+        let bytes = encode(
+            &LobbySlot::new(562, 1, None, Vec::new()).with_legacy_damage(14),
+            ProtocolVersion::V1_13_1,
+        );
+        assert_eq!(&bytes[..4], &[0x02, 0x32, 0x01, 0x00]);
+        assert_eq!(bytes.len(), 4);
     }
 
     #[test]
@@ -356,7 +547,8 @@ mod tests {
         let lore = vec![parse_mini_message("<gray>Right-click").unwrap()];
 
         // 1.13.2: name is JSON, lore is legacy text.
-        let nbt = build_display_nbt_modern(&Some(name), &lore, ProtocolVersion::V1_13_2).unwrap();
+        let nbt =
+            build_display_nbt_modern(&Some(name), &lore, false, ProtocolVersion::V1_13_2).unwrap();
         let display = display_tag(&nbt);
         assert!(
             display
@@ -372,7 +564,7 @@ mod tests {
 
         // 1.14+: both name and lore are JSON.
         let lore2 = vec![parse_mini_message("<gray>Right-click").unwrap()];
-        let nbt2 = build_display_nbt_modern(&None, &lore2, ProtocolVersion::V1_14).unwrap();
+        let nbt2 = build_display_nbt_modern(&None, &lore2, false, ProtocolVersion::V1_14).unwrap();
         let display2 = display_tag(&nbt2);
         assert!(
             display2.get("Lore").and_then(Value::get_list).unwrap()[0]
@@ -387,7 +579,7 @@ mod tests {
         let name = parse_mini_message("<bold><gold>Server Selector").unwrap();
         let lore = vec![parse_mini_message("<gray>Right-click").unwrap()];
 
-        let nbt = build_display_nbt_legacy(&Some(name), &lore).unwrap();
+        let nbt = build_display_nbt_legacy(&Some(name), &lore, false).unwrap();
         let display = display_tag(&nbt);
         assert_eq!(
             display.get("Name").and_then(Value::get_str),

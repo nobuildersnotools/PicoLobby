@@ -26,7 +26,8 @@ use pico_precomputed_registries::PrecomputedRegistries;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
 pub use selector::{
-    LobbySelector, LobbyVisibilityToggle, OpenSelectorState, SelectorClick, build_selector_menu,
+    LobbySelector, LobbyVisibilityToggle, MENU_SIZE, OpenSelectorState, SelectorClick,
+    build_selector_menu,
 };
 pub use server_commands::{ServerCommand, ServerCommands};
 use std::collections::{HashMap, HashSet};
@@ -41,6 +42,7 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tracing::debug;
 
+mod legacy_items;
 mod lobby;
 mod navigation;
 mod selector;
@@ -924,6 +926,12 @@ pub enum ServerStateBuilderError {
         item_kind: &'static str,
         item: String,
     },
+    #[error(
+        "lobby selector entry '{destination}' uses slot {slot}, which is outside the menu range 0..=26"
+    )]
+    InvalidSelectorSlot { destination: String, slot: usize },
+    #[error("more than one lobby selector entry is assigned to menu slot {slot}")]
+    DuplicateSelectorSlot { slot: usize },
 }
 
 impl ServerStateBuilder {
@@ -1067,6 +1075,7 @@ impl ServerStateBuilder {
         destinations: Vec<LobbyDestination>,
     ) -> Result<&mut Self, ServerStateBuilderError> {
         let mut ids = HashSet::new();
+        let mut used_slots = HashSet::new();
         for dest in &destinations {
             let id = dest.id.as_str();
             if id.trim().is_empty() {
@@ -1084,6 +1093,18 @@ impl ServerStateBuilder {
             }
             if dest.server.trim().is_empty() {
                 return Err(ServerStateBuilderError::EmptyServerName(id.to_string()));
+            }
+            validate_lobby_item("selector entry", &dest.item)?;
+            if let Some(slot) = dest.slot {
+                if slot >= MENU_SIZE {
+                    return Err(ServerStateBuilderError::InvalidSelectorSlot {
+                        destination: id.to_string(),
+                        slot,
+                    });
+                }
+                if !used_slots.insert(slot) {
+                    return Err(ServerStateBuilderError::DuplicateSelectorSlot { slot });
+                }
             }
         }
         self.lobby_destinations = destinations;
@@ -1433,7 +1454,7 @@ fn validate_lobby_item(item_kind: &'static str, item: &str) -> Result<(), Server
     if PrecomputedRegistries::new(ProtocolVersion::V26_1)
         .resolve_item_id(item)
         .is_some()
-        || legacy_item_id_for_current_validation(item).is_some()
+        || legacy_items::legacy_item(item).is_some()
     {
         Ok(())
     } else {
@@ -1441,18 +1462,6 @@ fn validate_lobby_item(item_kind: &'static str, item: &str) -> Result<(), Server
             item_kind,
             item: item.to_string(),
         })
-    }
-}
-
-fn legacy_item_id_for_current_validation(item: &str) -> Option<i32> {
-    match item {
-        "minecraft:compass" => Some(345),
-        "minecraft:paper" => Some(339),
-        "minecraft:ender_eye" => Some(381),
-        "minecraft:nether_star" => Some(399),
-        "minecraft:clock" => Some(347),
-        "minecraft:book" => Some(340),
-        _ => None,
     }
 }
 
