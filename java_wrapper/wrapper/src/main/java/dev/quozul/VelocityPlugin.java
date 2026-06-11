@@ -49,11 +49,14 @@ public class VelocityPlugin {
         }
 
         Path configurationFile = dataDirectory.resolve("server.toml");
-        this.worker = new PicoLobbyRunner(configurationFile);
-
-        this.task = server.getScheduler()
-                .buildTask(plugin, worker)
-                .schedule();
+        try {
+            this.worker = new PicoLobbyRunner(configurationFile);
+            this.task = server.getScheduler()
+                    .buildTask(plugin, worker)
+                    .schedule();
+        } catch (Exception e) {
+            logger.error("Error initializing PicoLobby", e);
+        }
     }
 
     @Subscribe

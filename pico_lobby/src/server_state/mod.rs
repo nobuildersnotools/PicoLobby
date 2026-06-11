@@ -556,7 +556,10 @@ impl ServerState {
 
     pub fn register_lobby_session(&self, client_state: &mut ClientState) -> Option<LobbySession> {
         if !self.lobby_enabled {
-            client_state.set_entity_id(0);
+            // Use entity id 1 rather than 0 in the limbo-fallback path: some clients
+            // treat entity id 0 specially, so the player's own entity is given a
+            // non-zero id (matching the lobby allocator's first player id).
+            client_state.set_entity_id(1);
             client_state.clear_lobby_session_id();
             return None;
         }
@@ -1613,7 +1616,9 @@ mod tests {
         let mut client = client("first", Uuid::from_u128(1));
 
         assert!(server_state.register_lobby_session(&mut client).is_none());
-        assert_eq!(client.entity_id(), 0);
+        // The limbo-fallback path assigns entity id 1 (not 0) since some clients
+        // treat entity id 0 specially.
+        assert_eq!(client.entity_id(), 1);
         assert_eq!(client.lobby_session_id(), None);
         assert!(server_state.plan_lobby_recipients(None).is_empty());
 
