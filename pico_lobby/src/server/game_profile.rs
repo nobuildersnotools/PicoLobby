@@ -13,11 +13,8 @@ pub struct GameProfile {
 
 impl GameProfile {
     pub fn new(username: &str, uuid: Uuid, textures: Option<Property>) -> Self {
-        let username = username
-            .get(..16)
-            .map_or_else(|| username.to_string(), std::string::ToString::to_string);
         Self {
-            username,
+            username: sanitize_username(username),
             uuid,
             textures,
         }
@@ -57,7 +54,7 @@ impl GameProfile {
 
 impl From<&LoginStartPacket> for GameProfile {
     fn from(value: &LoginStartPacket) -> Self {
-        let username = value.name();
+        let username = sanitize_username(&value.name());
         let uuid = {
             let login_uuid = value.uuid();
             if login_uuid.is_nil() {
@@ -73,6 +70,24 @@ impl From<&LoginStartPacket> for GameProfile {
             textures: None,
         }
     }
+}
+
+/// Maximum length of a Minecraft username, in characters.
+const MAX_USERNAME_LEN: usize = 16;
+
+/// Normalises a client-supplied username before it is stored, logged, or
+/// broadcast to other players.
+///
+/// Control characters and the legacy section sign (`§`) are stripped to prevent
+/// log/chat injection and colour spoofing, and the result is capped at
+/// [`MAX_USERNAME_LEN`] characters. Behind a Velocity proxy the forwarded name
+/// is already validated, so this is a no-op there; it is a safety net for any
+/// direct (non-forwarded) connection where the name is fully client-controlled.
+fn sanitize_username(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| !c.is_control() && *c != '\u{00a7}')
+        .take(MAX_USERNAME_LEN)
+        .collect()
 }
 
 fn offline_uuid_from_username(username: &str) -> Uuid {
@@ -111,6 +126,16 @@ mod tests {
         assert_eq!(first.uuid(), expected);
         assert_eq!(second.uuid(), expected);
         assert_eq!(first.uuid(), second.uuid());
+    }
+
+    #[test]
+    fn new_strips_control_and_section_chars_and_caps_length() {
+        let profile = GameProfile::new("a\nb\u{00a7}c", Uuid::nil(), None);
+        assert_eq!(profile.username(), "abc");
+
+        let long = "x".repeat(40);
+        let profile = GameProfile::new(&long, Uuid::nil(), None);
+        assert_eq!(profile.username().chars().count(), 16);
     }
 
     fn build_login_start_packet(name: &str, uuid: Uuid) -> LoginStartPacket {

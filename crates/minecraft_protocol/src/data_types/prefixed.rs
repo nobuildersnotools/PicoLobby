@@ -17,6 +17,12 @@ where
         protocol_version: ProtocolVersion,
     ) -> Result<Self, BinaryReaderError> {
         let size = L::read_to_usize(reader)?;
+        // Each element is at least one byte on the wire, so a valid count can never
+        // exceed the bytes left in the buffer. Reject oversized prefixes before
+        // allocating to prevent a tiny packet from requesting a huge allocation.
+        if size > reader.remaining() {
+            return Err(BinaryReaderError::UnexpectedEof);
+        }
         let mut vec: Vec<T> = Vec::with_capacity(size);
         for _i in 0..size {
             vec.push(T::decode(reader, protocol_version)?);

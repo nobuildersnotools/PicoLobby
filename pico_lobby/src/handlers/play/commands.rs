@@ -72,12 +72,23 @@ fn handle_chat_message(
     }
 }
 
+/// Minimum interval between two commands from the same client. Five commands a
+/// second is far above any human cadence but caps automated command floods,
+/// each of which can generate outbound packets (transfers, `BungeeCord` connects)
+/// and log lines.
+const COMMAND_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
 fn run_command(
     client_state: &mut ClientState,
     server_state: &ServerState,
     command: &str,
     batch: &mut Batch<PacketRegistry>,
 ) {
+    // Drop floods silently; sending feedback here would itself be an amplifier.
+    if !client_state.check_command_rate_limit(COMMAND_MIN_INTERVAL) {
+        return;
+    }
+
     info!(
         "{} issued server command: /{}",
         client_state.get_username(),

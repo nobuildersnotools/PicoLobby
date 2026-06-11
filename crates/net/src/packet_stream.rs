@@ -97,6 +97,15 @@ where
 
         let mut reader = BinaryReader::new(&packet_content_buf);
         let data_length = usize::try_from(reader.read::<VarInt>()?.inner())?;
+        // The declared uncompressed size must fit within the protocol maximum.
+        // Without this a tiny compressed packet could claim a multi-gigabyte
+        // size and force a huge allocation / decompression.
+        if data_length > MAXIMUM_PACKET_LENGTH {
+            return Err(PacketStreamError::PacketTooLarge {
+                size: data_length,
+                max: MAXIMUM_PACKET_LENGTH,
+            });
+        }
         let payload_bytes = reader.remaining_bytes()?;
 
         let packet_data = if data_length > 0 {
@@ -228,7 +237,14 @@ fn decompress_data(
     compressed_data: &[u8],
     uncompressed_size: usize,
 ) -> Result<Vec<u8>, PacketStreamError> {
-    let mut decoder = ZlibDecoder::new(compressed_data);
+    // Inflate at most one byte beyond the declared size. A zlib bomb whose real
+    // output exceeds `uncompressed_size` then trips the size-mismatch check below
+    // instead of inflating without bound into memory. `uncompressed_size` is
+    // already capped to `MAXIMUM_PACKET_LENGTH` by the caller.
+    let inflate_limit = u64::try_from(uncompressed_size)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let mut decoder = ZlibDecoder::new(compressed_data).take(inflate_limit);
     let mut decompressed_data = Vec::with_capacity(uncompressed_size);
 
     decoder
@@ -332,6 +348,28 @@ mod tests {
     }
 
     // Uncompressed Write Tests
+
+    #[test]
+    fn decompress_roundtrip_ok() {
+        let original = b"hello world".repeat(50);
+        let compressed = compress_data(&original, Compression::new(6)).unwrap();
+        let out = decompress_data(&compressed, original.len()).unwrap();
+        assert_eq!(out, original);
+    }
+
+    #[test]
+    fn decompress_rejects_understated_size_bomb() {
+        // Compresses to a small payload but inflates far past the declared size.
+        let original = vec![0u8; 10_000];
+        let compressed = compress_data(&original, Compression::new(9)).unwrap();
+        // A bomb lies about its uncompressed size; the inflate cap + mismatch
+        // check must reject it rather than inflating unbounded.
+        let result = decompress_data(&compressed, 10);
+        assert!(matches!(
+            result,
+            Err(PacketStreamError::DecompressionSizeMismatch { .. })
+        ));
+    }
 
     #[tokio::test]
     async fn test_write_simple_packet() {

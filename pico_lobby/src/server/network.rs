@@ -34,17 +34,31 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
+use tokio::sync::Semaphore;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::time::{Duration, Interval};
+use tokio::time::{Duration, Instant, Interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 const LOBBY_BROADCAST_QUEUE_CAPACITY: usize = 256;
 
+/// Coarse ceiling on simultaneously handled connections. This is a safety net
+/// against connection-count floods (only reachable if the backend port is not
+/// firewalled to the proxy); the primary control is network isolation. Raise it
+/// if a deployment legitimately exceeds this many concurrent connections.
+const MAX_CONCURRENT_CONNECTIONS: usize = 1000;
+
+/// Disconnect a client that sends no inbound packet for this long. Mirrors
+/// vanilla's keep-alive timeout and reaps slowloris/half-open connections that
+/// would otherwise hold a task and socket forever (clients answer the server's
+/// keep-alive within this window, which counts as inbound activity).
+const CLIENT_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct Server {
     state: Arc<RwLock<ServerState>>,
     listen_address: String,
+    connection_limiter: Arc<Semaphore>,
 }
 
 impl Server {
@@ -52,6 +66,7 @@ impl Server {
         Self {
             state: Arc::new(RwLock::new(state)),
             listen_address: listen_address.to_string(),
+            connection_limiter: Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS)),
         }
     }
 
@@ -75,9 +90,22 @@ impl Server {
                  accept_result = listener.accept() => {
                     match accept_result {
                         Ok((socket, addr)) => {
+                            let Ok(permit) =
+                                Arc::clone(&self.connection_limiter).try_acquire_owned()
+                            else {
+                                warn!(
+                                    "Connection limit ({}) reached; rejecting {}",
+                                    MAX_CONCURRENT_CONNECTIONS, addr
+                                );
+                                continue;
+                            };
                             debug!("Accepted connection from {}", addr);
-                        let state_clone = Arc::clone(&self.state);
+                            // Disable Nagle: lobby traffic is latency-sensitive and small.
+                            let _ = socket.set_nodelay(true);
+                            let state_clone = Arc::clone(&self.state);
                             tokio::spawn(async move {
+                                // Hold the permit for the lifetime of the connection.
+                                let _permit = permit;
                                 handle_client(socket, state_clone).await;
                             });
                         }
@@ -578,6 +606,7 @@ fn queue_broadcast_packet(sender: &mpsc::Sender<RawPacket>, raw_packet: RawPacke
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn read(
     client_data: &ClientData,
     server_state: &Arc<RwLock<ServerState>>,
@@ -586,11 +615,18 @@ async fn read(
     broadcast_rx: &mut mpsc::Receiver<RawPacket>,
     scoreboard_interval: &mut Option<Interval>,
     last_scoreboard_render: &mut Option<RenderedScoreboard>,
+    idle_deadline: &mut Instant,
 ) -> Result<(), PacketProcessingError> {
     tokio::select! {
         result = client_data.read_packet() => {
             let raw_packet = result?;
+            // Any inbound packet (including keep-alive responses) is liveness.
+            *idle_deadline = Instant::now() + CLIENT_IDLE_TIMEOUT;
             process_packet(client_data, server_state, raw_packet, was_in_play_state, broadcast_tx).await?;
+        }
+        () = tokio::time::sleep_until(*idle_deadline) => {
+            debug!("Disconnecting idle client after {:?} without inbound packets", CLIENT_IDLE_TIMEOUT);
+            return Err(PacketProcessingError::Disconnected);
         }
         () = client_data.keep_alive_tick() => {
             send_keep_alive(client_data).await?;
@@ -766,6 +802,7 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
     let mut was_in_play_state = false;
     let mut scoreboard_interval = configured_scoreboard_interval(&server_state).await;
     let mut last_scoreboard_render = None;
+    let mut idle_deadline = Instant::now() + CLIENT_IDLE_TIMEOUT;
 
     loop {
         match read(
@@ -776,6 +813,7 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
             &mut broadcast_rx,
             &mut scoreboard_interval,
             &mut last_scoreboard_render,
+            &mut idle_deadline,
         )
         .await
         {

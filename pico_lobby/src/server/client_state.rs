@@ -30,6 +30,7 @@ impl Default for ClientState {
             pending_lobby_chat_plan: None,
             pending_lobby_private_message_plan: None,
             last_chat_message_at: None,
+            last_command_at: None,
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
             pending_lobby_swing_plan: None,
@@ -61,6 +62,7 @@ pub struct ClientState {
     pending_lobby_chat_plan: Option<LobbyChatPlan>,
     pending_lobby_private_message_plan: Option<LobbyPrivateMessagePlan>,
     last_chat_message_at: Option<Instant>,
+    last_command_at: Option<Instant>,
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
     pending_lobby_swing_plan: Option<LobbySwingPlan>,
@@ -220,6 +222,21 @@ impl ClientState {
 
     pub fn consume_chat_rate_limit(&mut self) {
         self.last_chat_message_at = Some(Instant::now());
+    }
+
+    /// Returns `true` if a command may run now, recording the time. Throttles
+    /// command processing so a client cannot flood the server with commands
+    /// (each of which generates outbound packets and log lines) faster than
+    /// `min_interval`. This is independent of chat anti-spam.
+    pub fn check_command_rate_limit(&mut self, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_command_at
+            && now.duration_since(last) < min_interval
+        {
+            return false;
+        }
+        self.last_command_at = Some(now);
+        true
     }
 
     pub fn set_pending_metadata_plan(&mut self, plan: LobbyMetadataPlan) {
