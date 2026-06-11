@@ -30,6 +30,9 @@ pub const DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS: u64 = 3000;
 /// Default item shown for a selector entry when none is configured.
 pub const DEFAULT_SELECTOR_ENTRY_ITEM: &str = "minecraft:paper";
 
+/// Default item used to fill the selector GUI's empty background slots.
+pub const DEFAULT_SELECTOR_FILLER_ITEM: &str = "minecraft:gray_stained_glass_pane";
+
 fn default_selector_entry_item() -> String {
     DEFAULT_SELECTOR_ENTRY_ITEM.to_string()
 }
@@ -89,6 +92,32 @@ pub struct VisibilityToggleConfig {
     pub message_off: Option<String>,
 }
 
+/// Configuration for the item placed in the selector GUI's empty background
+/// slots (every slot not occupied by a server entry).
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct SelectorFillerConfig {
+    /// Item identifier, e.g. `"minecraft:gray_stained_glass_pane"`.
+    pub item: String,
+    /// Optional `MiniMessage` display name. Defaults to an empty name so the
+    /// filler is visually blank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Optional `MiniMessage` lore lines.
+    #[serde(default)]
+    pub lore: Vec<String>,
+}
+
+impl Default for SelectorFillerConfig {
+    fn default() -> Self {
+        Self {
+            item: DEFAULT_SELECTOR_FILLER_ITEM.to_string(),
+            display_name: Some(" ".to_string()),
+            lore: Vec::new(),
+        }
+    }
+}
+
 /// Configuration for the hotbar selector item placed in the player's inventory.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +131,10 @@ pub struct SelectorItemConfig {
     /// Optional `MiniMessage` lore lines.
     #[serde(default)]
     pub lore: Vec<String>,
+    /// Optional item used to fill the selector GUI's empty background slots.
+    /// When omitted those slots are left empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filler: Option<SelectorFillerConfig>,
 }
 
 impl Default for SelectorItemConfig {
@@ -111,6 +144,7 @@ impl Default for SelectorItemConfig {
             item: "minecraft:compass".to_string(),
             display_name: Some("<bold><gold>Server Selector".to_string()),
             lore: vec!["<gray>Right-click to choose a server.".to_string()],
+            filler: Some(SelectorFillerConfig::default()),
         }
     }
 }

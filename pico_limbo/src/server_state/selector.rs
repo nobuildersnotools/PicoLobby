@@ -8,6 +8,49 @@ use minecraft_protocol::prelude::ProtocolVersion;
 use pico_precomputed_registries::PrecomputedRegistries;
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
 
+/// A version-resolved background filler item used for the selector GUI's empty
+/// slots.
+#[derive(Debug, Clone)]
+pub struct LobbyFiller {
+    pub(crate) item_identifier: String,
+    display_name: Option<Component>,
+    lore: Vec<Component>,
+}
+
+impl LobbyFiller {
+    /// Build and validate a `LobbyFiller` from its config strings.
+    ///
+    /// # Errors
+    /// Returns an error if any `MiniMessage` string fails to parse.
+    pub fn new(
+        item_identifier: impl Into<String>,
+        display_name_mm: Option<&str>,
+        lore_mm: &[String],
+    ) -> Result<Self, MiniMessageError> {
+        let display_name = display_name_mm.map(parse_mini_message).transpose()?;
+        let lore: Vec<Component> = lore_mm
+            .iter()
+            .map(|s| parse_mini_message(s))
+            .collect::<Result<_, _>>()?;
+
+        Ok(Self {
+            item_identifier: item_identifier.into(),
+            display_name,
+            lore,
+        })
+    }
+
+    /// Builds the version-resolved filler item stack, or `None` if the item is
+    /// unknown for `version` (in which case the slot is left empty).
+    fn build_slot(&self, version: ProtocolVersion) -> Option<LobbySlot> {
+        let (item_id, damage) = resolve_item(&self.item_identifier, version)?;
+        Some(
+            LobbySlot::new(item_id, 1, self.display_name.clone(), self.lore.clone())
+                .with_legacy_damage(damage),
+        )
+    }
+}
+
 /// Configured hotbar selector item.
 #[derive(Debug, Clone)]
 pub struct LobbySelector {
@@ -15,6 +58,7 @@ pub struct LobbySelector {
     pub(crate) item_identifier: String,
     display_name: Option<Component>,
     lore: Vec<Component>,
+    filler: Option<LobbyFiller>,
 }
 
 impl LobbySelector {
@@ -46,7 +90,19 @@ impl LobbySelector {
             item_identifier,
             display_name,
             lore,
+            filler: None,
         })
+    }
+
+    /// Attaches a background filler item used for the selector GUI's empty slots.
+    #[must_use]
+    pub fn with_filler(mut self, filler: Option<LobbyFiller>) -> Self {
+        self.filler = filler;
+        self
+    }
+
+    pub const fn filler(&self) -> Option<&LobbyFiller> {
+        self.filler.as_ref()
     }
 
     pub const fn display_name(&self) -> Option<&Component> {
@@ -213,14 +269,20 @@ pub const MENU_SIZE: usize = 27;
 /// free slots in order. Per-entry items that are unknown for `version` fall
 /// back to paper so the entry still appears. Entries that cannot be placed
 /// (out of range or colliding) and overflow past 27 slots are skipped.
+///
+/// Any slot left empty by the destinations is filled with `filler` (when
+/// configured and resolvable for `version`); these filler slots are not
+/// selectable.
 pub fn build_selector_menu(
     window_id: u8,
     destinations: &[LobbyDestination],
+    filler: Option<&LobbyFiller>,
     version: ProtocolVersion,
 ) -> OpenSelectorState {
     let paper_id = resolve_paper_id(version);
 
-    let mut slots = vec![LobbySlot::empty(); MENU_SIZE];
+    let filler_slot = filler.and_then(|f| f.build_slot(version));
+    let mut slots = vec![filler_slot.unwrap_or_else(LobbySlot::empty); MENU_SIZE];
     let mut slot_map: Vec<Option<String>> = vec![None; MENU_SIZE];
 
     // First pass: entries with an explicit, in-range, unoccupied slot.
@@ -362,7 +424,7 @@ mod tests {
     #[test]
     fn build_selector_menu_slot_layout() {
         let dests = vec![dest("survival"), dest("creative"), dest("minigames")];
-        let state = build_selector_menu(1, &dests, ProtocolVersion::V1_21);
+        let state = build_selector_menu(1, &dests, None, ProtocolVersion::V1_21);
 
         assert_eq!(state.slot_map[0], Some("survival".to_string()));
         assert_eq!(state.slot_map[1], Some("creative".to_string()));
@@ -400,7 +462,7 @@ mod tests {
             dest("pinned").with_slot(Some(0)),
             dest("auto-b"),
         ];
-        let state = build_selector_menu(1, &dests, ProtocolVersion::V1_21);
+        let state = build_selector_menu(1, &dests, None, ProtocolVersion::V1_21);
 
         // The pinned entry claims slot 0; auto entries fill around it in order.
         assert_eq!(state.slot_map[0], Some("pinned".to_string()));
@@ -416,7 +478,7 @@ mod tests {
         assert_ne!(paper, compass);
 
         let dests = vec![dest("a").with_item("minecraft:compass"), dest("b")];
-        let state = build_selector_menu(1, &dests, version);
+        let state = build_selector_menu(1, &dests, None, version);
 
         assert_eq!(state.slots[0].item_id(), compass);
         assert_eq!(state.slots[1].item_id(), paper);
@@ -429,8 +491,8 @@ mod tests {
         use minecraft_protocol::prelude::{BinaryWriter, EncodePacket};
 
         let version = ProtocolVersion::V1_21;
-        let plain = build_selector_menu(1, &[dest("a")], version);
-        let glinted = build_selector_menu(1, &[dest("a").with_enchanted(true)], version);
+        let plain = build_selector_menu(1, &[dest("a")], None, version);
+        let glinted = build_selector_menu(1, &[dest("a").with_enchanted(true)], None, version);
 
         let encode = |slot: &LobbySlot| {
             let mut writer = BinaryWriter::default();
@@ -444,12 +506,54 @@ mod tests {
     }
 
     #[test]
+    fn filler_fills_empty_slots_without_making_them_selectable() {
+        let version = ProtocolVersion::V1_21;
+        let (pane, _) = resolve_item("minecraft:gray_stained_glass_pane", version).unwrap();
+        let filler = LobbyFiller::new("minecraft:gray_stained_glass_pane", None, &[]).unwrap();
+
+        let dests = vec![dest("survival"), dest("creative")];
+        let state = build_selector_menu(1, &dests, Some(&filler), version);
+
+        // Destination slots keep their own items and remain selectable.
+        assert_eq!(state.slot_map[0], Some("survival".to_string()));
+        assert_eq!(state.slot_map[1], Some("creative".to_string()));
+
+        // Every other slot shows the filler item but holds no destination, so a
+        // click there resyncs rather than navigating.
+        for i in 2..MENU_SIZE {
+            assert!(state.slot_map[i].is_none());
+            assert_eq!(state.slots[i].item_id(), pane);
+            let slot = i16::try_from(i).expect("slot index fits i16");
+            assert!(matches!(
+                state.classify(&make_click(slot, 0, 0, 1), version),
+                SelectorClick::RequiresResync
+            ));
+        }
+    }
+
+    #[test]
+    fn filler_legacy_item_resolves_with_metadata() {
+        // gray_stained_glass_pane is a pre-Flattening variant: id 160, meta 7.
+        let filler = LobbyFiller::new("minecraft:gray_stained_glass_pane", None, &[]).unwrap();
+        let state = build_selector_menu(1, &[], Some(&filler), ProtocolVersion::V1_8);
+        assert_eq!(state.slots[0].item_id(), 160);
+    }
+
+    #[test]
+    fn unknown_filler_item_leaves_slots_empty() {
+        let version = ProtocolVersion::V1_21;
+        let filler = LobbyFiller::new("minecraft:not_a_real_item", None, &[]).unwrap();
+        let state = build_selector_menu(1, &[], Some(&filler), version);
+        assert_eq!(state.slots[0].item_id(), -1);
+    }
+
+    #[test]
     fn unknown_per_entry_item_falls_back_to_paper() {
         let version = ProtocolVersion::V1_21;
         let (paper, _) = resolve_item("minecraft:paper", version).unwrap();
 
         let dests = vec![dest("a").with_item("minecraft:not_a_real_item")];
-        let state = build_selector_menu(1, &dests, version);
+        let state = build_selector_menu(1, &dests, None, version);
 
         assert_eq!(state.slots[0].item_id(), paper);
     }
@@ -466,7 +570,7 @@ mod tests {
     }
 
     fn open_state_with_two_dests() -> OpenSelectorState {
-        build_selector_menu(1, &[dest("a"), dest("b")], ProtocolVersion::V1_21)
+        build_selector_menu(1, &[dest("a"), dest("b")], None, ProtocolVersion::V1_21)
     }
 
     #[test]

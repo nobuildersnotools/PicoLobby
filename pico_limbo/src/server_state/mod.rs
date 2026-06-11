@@ -26,7 +26,7 @@ use pico_precomputed_registries::PrecomputedRegistries;
 use pico_structures::prelude::{Schematic, SchematicError, World, WorldLoadingError};
 use pico_text_component::prelude::{Component, MiniMessageError, parse_mini_message};
 pub use selector::{
-    LobbySelector, LobbyVisibilityToggle, MENU_SIZE, OpenSelectorState, SelectorClick,
+    LobbyFiller, LobbySelector, LobbyVisibilityToggle, MENU_SIZE, OpenSelectorState, SelectorClick,
     build_selector_menu,
 };
 pub use server_commands::{ServerCommand, ServerCommands};
@@ -1082,8 +1082,17 @@ impl ServerStateBuilder {
     ) -> Result<&mut Self, ServerStateBuilderError> {
         if let Some(cfg) = config {
             validate_hotbar_slot("selector", cfg.slot)?;
+            let filler = cfg
+                .filler
+                .map(|f| {
+                    let filler = LobbyFiller::new(&f.item, f.display_name.as_deref(), &f.lore)?;
+                    validate_lobby_item("selector filler", &filler.item_identifier)?;
+                    Ok::<_, ServerStateBuilderError>(filler)
+                })
+                .transpose()?;
             let selector =
-                LobbySelector::new(cfg.slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?;
+                LobbySelector::new(cfg.slot, &cfg.item, cfg.display_name.as_deref(), &cfg.lore)?
+                    .with_filler(filler);
             validate_lobby_item("selector", &selector.item_identifier)?;
             self.lobby_selector = Some(selector);
         }
@@ -1827,6 +1836,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: None,
                 lore: vec![],
+                filler: None,
             }))
             .unwrap()
             .set_lobby_visibility_toggle(Some(visibility_toggle_config(4)))
@@ -1848,6 +1858,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: None,
                 lore: vec![],
+                filler: None,
             }))
             .unwrap()
             .set_lobby_visibility_toggle(Some(visibility_toggle_config(8)))
@@ -1865,6 +1876,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: None,
                 lore: vec![],
+                filler: None,
             })),
             Err(ServerStateBuilderError::InvalidHotbarSlot {
                 item_kind: "selector",

@@ -1387,6 +1387,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: Some("<bold>Selector".to_string()),
                 lore: vec!["<gray>Right-click".to_string()],
+                filler: None,
             }))
             .unwrap();
         builder.build().unwrap()

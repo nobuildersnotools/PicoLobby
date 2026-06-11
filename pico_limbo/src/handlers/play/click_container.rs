@@ -3,13 +3,14 @@ use crate::server::client_state::ClientState;
 use crate::server::lobby_chat::plain_chat_feedback_packet;
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::PacketRegistry;
-use crate::server_state::{SelectorClick, ServerState};
+use crate::server_state::{MENU_SIZE, SelectorClick, ServerState};
 use minecraft_packets::play::LobbySlot;
 use minecraft_packets::play::click_container_packet::ClickContainerPacket;
 use minecraft_packets::play::client_bound_plugin_message_packet::PlayClientBoundPluginMessagePacket;
 use minecraft_packets::play::close_container_packet::CloseContainerPacket;
 use minecraft_packets::play::confirm_transaction_packet::ConfirmTransactionPacket;
 use minecraft_packets::play::set_container_content_packet::SetContainerContentPacket;
+use minecraft_packets::play::set_container_slot_packet::SetContainerSlotPacket;
 use minecraft_protocol::prelude::ProtocolVersion;
 use tracing::{info, warn};
 
@@ -51,7 +52,7 @@ impl PacketHandler for ClickContainerPacket {
                     .and_then(|s| s.slot_map[slot_index].clone());
 
                 let Some(destination_id) = destination_id else {
-                    let mut batch = resync(client_state, self);
+                    let mut batch = resync(client_state, server_state, self);
                     resync_lobby_inventory(
                         client_state,
                         server_state,
@@ -89,7 +90,7 @@ impl PacketHandler for ClickContainerPacket {
                     Err(err) => {
                         warn!("{}: {}", client_state.get_username(), err);
                         let msg = format!("Unknown server: {destination_id}");
-                        let mut batch = resync(client_state, self);
+                        let mut batch = resync(client_state, server_state, self);
                         resync_lobby_inventory(
                             client_state,
                             server_state,
@@ -102,7 +103,7 @@ impl PacketHandler for ClickContainerPacket {
                 }
             }
             SelectorClick::RequiresResync => {
-                let mut batch = resync(client_state, self);
+                let mut batch = resync(client_state, server_state, self);
                 resync_lobby_inventory(
                     client_state,
                     server_state,
@@ -126,23 +127,66 @@ impl PacketHandler for ConfirmTransactionPacket {
     }
 }
 
-fn resync(client_state: &mut ClientState, click: &ClickContainerPacket) -> Batch<PacketRegistry> {
+fn resync(
+    client_state: &mut ClientState,
+    server_state: &ServerState,
+    click: &ClickContainerPacket,
+) -> Batch<PacketRegistry> {
     let version = client_state.protocol_version();
+    let players_visible = client_state.players_visible();
     let Some(selector) = client_state.open_selector_mut() else {
         return Batch::new();
     };
     selector.state_id += 1;
-    let pkt = SetContainerContentPacket::new(
-        selector.window_id,
-        selector.state_id,
-        selector.slots.clone(),
-    );
+    // Send the full window (menu + player inventory) so that any item the
+    // client predicted moving into the player-inventory portion — e.g. by
+    // shift-clicking a menu item out — is cleared back to the server's view.
+    let slots = full_selector_window_slots(&selector.slots, server_state, version, players_visible);
+    let pkt = SetContainerContentPacket::new(selector.window_id, selector.state_id, slots);
     let mut batch = Batch::new();
     if let Some(confirm) = legacy_reject_click(version, click) {
         batch.queue(|| PacketRegistry::ClientBoundConfirmTransaction(confirm));
     }
     batch.queue(|| PacketRegistry::SetContainerContent(pkt));
     batch
+}
+
+/// Builds the full slot contents for an open selector window: the 27 menu slots
+/// followed by the 36 player-inventory slots. The configured lobby hotbar items
+/// are placed in their hotbar positions; every other player slot is empty. This
+/// lets a resync overwrite the player-inventory portion of the window, undoing
+/// client-side predictions such as shift-clicking a menu item out.
+fn full_selector_window_slots(
+    menu_slots: &[LobbySlot],
+    server_state: &ServerState,
+    version: ProtocolVersion,
+    players_visible: bool,
+) -> Vec<LobbySlot> {
+    // generic_9x3: 27 menu slots, then 27 main-inventory slots, then 9 hotbar slots.
+    let mut slots = menu_slots.to_vec();
+    slots.resize(MENU_SIZE + 36, LobbySlot::empty());
+
+    // Window hotbar slot for player hotbar index `h` is MENU_SIZE + 27 + h.
+    let hotbar_base = MENU_SIZE + 27;
+    let mut place = |hotbar_slot: u8, packet: SetContainerSlotPacket| {
+        let index = hotbar_base + usize::from(hotbar_slot);
+        if let Some(slot) = slots.get_mut(index) {
+            *slot = packet.into_slot_data();
+        }
+    };
+
+    if let Some(selector) = server_state.lobby_selector()
+        && let Some(packet) = selector.build_hotbar_packet(version)
+    {
+        place(selector.hotbar_slot, packet);
+    }
+    if let Some(toggle) = server_state.lobby_visibility_toggle()
+        && let Some(packet) = toggle.build_hotbar_packet(players_visible, version)
+    {
+        place(toggle.hotbar_slot, packet);
+    }
+
+    slots
 }
 
 fn reject_lobby_hotbar_item_move(
@@ -338,6 +382,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: None,
                 lore: vec![],
+                filler: None,
             }))
             .unwrap()
             .set_lobby_visibility_toggle(Some(VisibilityToggleConfig {
@@ -438,6 +483,50 @@ mod tests {
     }
 
     #[test]
+    fn full_selector_window_includes_player_inventory_and_hotbar_items() {
+        let server = server_with_lobby_items();
+        let menu = vec![LobbySlot::empty(); MENU_SIZE];
+
+        let slots = full_selector_window_slots(&menu, &server, ProtocolVersion::V1_21, true);
+
+        // 27 menu slots + 36 player-inventory slots make up the generic_9x3 window.
+        assert_eq!(slots.len(), MENU_SIZE + 36);
+        // The configured selector (hotbar 4) and toggle (hotbar 8) appear in the
+        // window's hotbar region (base MENU_SIZE + 27).
+        assert_ne!(slots[MENU_SIZE + 27 + 4].item_id(), -1);
+        assert_ne!(slots[MENU_SIZE + 27 + 8].item_id(), -1);
+        // The main-inventory region carries no items, so a shift-clicked ghost
+        // item landing there is cleared on resync.
+        for slot in &slots[MENU_SIZE..MENU_SIZE + 27] {
+            assert_eq!(slot.item_id(), -1);
+        }
+    }
+
+    #[test]
+    fn shift_clicking_menu_item_resyncs_full_selector_window() {
+        let server = server_with_lobby_items();
+        let mut client = client(ProtocolVersion::V1_21);
+        let destination = LobbyDestination::new("survival", "Survival", "survival");
+        client.set_open_selector(build_selector_menu(
+            1,
+            &[destination],
+            None,
+            ProtocolVersion::V1_21,
+        ));
+        // Shift-click (mode 1) the menu slot holding the destination.
+        let click = click(1, 0, 0, 1, ProtocolVersion::V1_21);
+
+        let packets = click.handle(&mut client, &server).unwrap().into_vec();
+
+        // The selector window is resynced rather than letting the item leave it.
+        assert!(
+            packets
+                .iter()
+                .any(|packet| matches!(packet, PacketRegistry::SetContainerContent(_)))
+        );
+    }
+
+    #[test]
     fn protected_hotbar_click_below_open_selector_resyncs_menu_and_hotbar_items() {
         let server = server_with_lobby_items();
         let mut client = client(ProtocolVersion::V1_21);
@@ -445,6 +534,7 @@ mod tests {
         client.set_open_selector(build_selector_menu(
             1,
             &[destination],
+            None,
             ProtocolVersion::V1_21,
         ));
         let click = click(1, 58, 0, 0, ProtocolVersion::V1_21);

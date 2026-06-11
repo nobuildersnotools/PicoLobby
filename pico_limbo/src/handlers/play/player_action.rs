@@ -39,6 +39,7 @@ mod tests {
                 item: "minecraft:compass".to_string(),
                 display_name: None,
                 lore: vec![],
+                filler: None,
             }))
             .unwrap()
             .set_lobby_visibility_toggle(Some(VisibilityToggleConfig {

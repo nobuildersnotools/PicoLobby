@@ -91,7 +91,7 @@ fn open_selector_for_selected_slot(
     }
 
     let window_id = client_state.allocate_window_id();
-    let state = build_selector_menu(window_id, destinations, version);
+    let state = build_selector_menu(window_id, destinations, selector.filler(), version);
 
     let title = selector
         .display_name()
