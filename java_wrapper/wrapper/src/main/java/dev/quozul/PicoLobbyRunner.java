@@ -2,11 +2,11 @@ package dev.quozul;
 
 import java.nio.file.Path;
 
-public class PicoLimboRunner implements Runnable {
+public class PicoLobbyRunner implements Runnable {
 
     private final Path configurationPath;
 
-    public PicoLimboRunner(Path configurationPath) {
+    public PicoLobbyRunner(Path configurationPath) {
         this.configurationPath = configurationPath;
     }
 

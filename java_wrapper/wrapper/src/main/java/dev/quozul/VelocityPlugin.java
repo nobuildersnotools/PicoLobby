@@ -15,8 +15,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 @Plugin(
-        id = "pico_limbo_java_wrapper",
-        name = "Velocity plugin to run PicoLimbo inside of Velocity",
+        id = "pico_lobby_java_wrapper",
+        name = "Velocity plugin to run PicoLobby inside of Velocity",
         version = "1.0",
         authors = {"Quozul"}
 )
@@ -26,7 +26,7 @@ public class VelocityPlugin {
     private final Logger logger;
     private final Object plugin;
     private final Path dataDirectory;
-    private PicoLimboRunner worker;
+    private PicoLobbyRunner worker;
     private ScheduledTask task;
 
     @Inject
@@ -49,7 +49,7 @@ public class VelocityPlugin {
         }
 
         Path configurationFile = dataDirectory.resolve("server.toml");
-        this.worker = new PicoLimboRunner(configurationFile);
+        this.worker = new PicoLobbyRunner(configurationFile);
 
         this.task = server.getScheduler()
                 .buildTask(plugin, worker)

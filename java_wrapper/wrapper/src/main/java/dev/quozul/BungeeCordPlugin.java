@@ -21,7 +21,7 @@ public class BungeeCordPlugin extends Plugin {
         }
 
         Path configurationFile = dataDirectory.resolve("server.toml");
-        PicoLimboRunner worker = new PicoLimboRunner(configurationFile);
+        PicoLobbyRunner worker = new PicoLobbyRunner(configurationFile);
 
         getProxy().getScheduler().runAsync(this, worker);
     }

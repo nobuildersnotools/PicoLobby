@@ -1,2 +1,2 @@
-rootProject.name = "pico_limbo_java_wrapper"
+rootProject.name = "pico_lobby_java_wrapper"
 include("wrapper")

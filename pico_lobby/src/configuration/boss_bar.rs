@@ -54,7 +54,7 @@ impl Default for BossBarConfig {
     fn default() -> Self {
         Self::Enabled(EnabledBossBarConfig {
             enabled: false,
-            title: "<bold>Welcome to PicoLimbo!</bold>".to_string(),
+            title: "<bold>Welcome to PicoLobby!</bold>".to_string(),
             health: 1.0,
             color: BossBarColorConfig::Pink,
             division: BossBarDivisionConfig::NoDivision,

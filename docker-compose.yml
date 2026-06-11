@@ -1,10 +1,10 @@
 services:
-  pico-limbo:
+  pico-lobby:
     build:
       context: .
       dockerfile: docker/Dockerfile
       args:
-        BINARY_NAME: pico_limbo
+        BINARY_NAME: pico_lobby
     image: ghcr.io/quozul/picolimbo:latest
     ports:
       - "30066:25565"

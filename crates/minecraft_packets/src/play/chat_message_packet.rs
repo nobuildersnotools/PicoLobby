@@ -4,7 +4,7 @@ use minecraft_protocol::prelude::*;
 pub struct ChatMessagePacket {
     /// Content of the message. Max length of 256 characters.
     message: String,
-    // The rest of the packet (signature since 1.16) is ignored as PicoLimbo does not need it
+    // The rest of the packet (signature since 1.16) is ignored as PicoLobby does not need it
 }
 
 impl ChatMessagePacket {

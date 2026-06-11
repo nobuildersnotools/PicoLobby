@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pico_limbo_lib::bench_support::{
+use pico_lobby_lib::bench_support::{
     BenchProtocol, HotChunkCache, PROTOCOLS, VIEW_DISTANCES, chunk_cache_cold,
     collect_chunk_packets, component_json, component_legacy, component_nbt,
     decode_representative_packets, default_config_parse, drain_mixed_batch, drain_raw_cache_batch,

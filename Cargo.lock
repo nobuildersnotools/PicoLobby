@@ -1318,7 +1318,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pico_limbo"
+name = "pico_lobby"
 version = "1.12.2+mc26.1.2"
 dependencies = [
  "base64",

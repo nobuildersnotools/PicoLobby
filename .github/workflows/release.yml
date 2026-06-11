@@ -24,8 +24,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: pico_limbo
-  LIB_NAME: pico_limbo_lib
+  BINARY_NAME: pico_lobby
+  LIB_NAME: pico_lobby_lib
 
 jobs:
   build-linux:

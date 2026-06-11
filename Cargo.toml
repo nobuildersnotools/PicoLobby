@@ -21,7 +21,7 @@ members = [
     "pico_libraries/pico_nbt",
     "pico_libraries/pico_precomputed_registries",
     "pico_libraries/pico_registries",
-    "pico_limbo",
+    "pico_lobby",
 ]
 
 [workspace.dependencies]

@@ -34,7 +34,7 @@ public class Standalone {
             RustLib lib = Native.load(tempLib.getAbsolutePath(), RustLib.class);
 
             String[] effectiveArgs = new String[args.length + 1];
-            effectiveArgs[0] = "pico_limbo_java_wrapper";
+            effectiveArgs[0] = "pico_lobby_java_wrapper";
             System.arraycopy(args, 0, effectiveArgs, 1, args.length);
 
             byte exitCode = lib.start_app(effectiveArgs.length, effectiveArgs);

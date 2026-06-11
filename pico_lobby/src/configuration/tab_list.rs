@@ -35,7 +35,7 @@ impl Default for TabListConfig {
         Self {
             mode: TabListMode::Enabled(EnabledTabListConfig {
                 enabled: true,
-                header: "<bold>Welcome to PicoLimbo</bold>".to_string(),
+                header: "<bold>Welcome to PicoLobby</bold>".to_string(),
                 footer: "<green>Enjoy your stay!</green>".to_string(),
             }),
             player_listed: true,

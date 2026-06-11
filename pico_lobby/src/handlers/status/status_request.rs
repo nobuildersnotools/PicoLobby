@@ -20,7 +20,7 @@ impl PacketHandler for StatusRequestPacket {
             if client_protocol_version.is_any() || client_protocol_version.is_unsupported() {
                 let oldest = ProtocolVersion::oldest().humanize();
                 let latest = ProtocolVersion::latest().humanize();
-                let version_string = format!("PicoLimbo {oldest}-{latest}");
+                let version_string = format!("PicoLobby {oldest}-{latest}");
                 (version_string, -1)
             } else {
                 (

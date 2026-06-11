@@ -38,7 +38,7 @@ const LATEST_REGISTRY = join(
 const OUT_RS = join(
     DATA_DIR,
     "..",
-    "pico_limbo",
+    "pico_lobby",
     "src",
     "server_state",
     "legacy_items.rs",

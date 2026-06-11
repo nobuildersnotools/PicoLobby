@@ -33,7 +33,7 @@ pub async fn start_server(config_path: PathBuf, logging_level: u8) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(err) => {
-            error!("Failed to start PicoLimbo: {err}");
+            error!("Failed to start PicoLobby: {err}");
             ExitCode::SUCCESS
         }
     }
