@@ -1,127 +1,31 @@
 <div align="center">
 
-# PicoLimbo
+# PicoLobby
 
-**An ultra-lightweight, multi-version Minecraft limbo server written in Rust**
+**An ultra-lightweight, multi-version Minecraft lobby server written in Rust - a fork of PicoLimbo.**
 
-*Supporting all Minecraft versions from 1.7.2 through 26.1.2*
-
-[![GitHub CI](https://img.shields.io/github/actions/workflow/status/Quozul/PicoLimbo/.github%2Fworkflows%2Fci.yml?branch=master)](https://github.com/Quozul/PicoLimbo/actions)
-[![Latest Release](https://img.shields.io/github/v/release/Quozul/PicoLimbo)](https://github.com/Quozul/PicoLimbo/releases)
-[![License](https://img.shields.io/github/license/Quozul/PicoLimbo)](LICENSE)
-[![Discord](https://img.shields.io/discord/1373364651118694585)](https://discord.gg/M2a9dxJPRy)
-
-[⭐ Star this repo](https://github.com/Quozul/PicoLimbo) • [💬 Join Discord](https://discord.gg/M2a9dxJPRy) • [📖 Read Docs](https://picolimbo.quozul.dev/)
-
-![PicoLimbo.png](docs/public/world.png)  
-*Schematic from [LOOHP/Limbo](https://github.com/LOOHP/Limbo)*
+*Supports versions 1.7.2 - 26.1.2*
 
 </div>
 
 ---
 
-## Community & Support
+## Inherits all features from PicoLimbo - see at https://github.com/Quozul/PicoLimbo
 
-If you have any questions, suggestions or simply want to stay updated, please join the [Discord server](https://discord.gg/M2a9dxJPRy)!
+## See and interact with other players
+Movement, chat, etc fully supported. Not much else to say here
 
-## Introduction
+## Built-in server selector
+Fully configurable, works like a traditional server selector that you'd find on a Java-based lobby server on a large network. Customize items, names, lore, and enchant.
 
-PicoLimbo is a lightweight [limbo server](https://quozul.dev/posts/2025-05-14-what-are-minecraft-limbo-servers/) written
-in Rust, designed primarily as an AFK or waiting server. Its core focus is on efficiency by implementing only essential
-packets required for client login and maintaining connection (keep-alive) without unnecessary overhead.
+# Built-in player visibility toggle
+Don't want to see other players? Turn them off.
 
-While not aiming to replicate every Minecraft server feature, PicoLimbo supports **all Minecraft versions from 1.7.2
-through 26.1.2**, excluding snapshots.
+## NPCs
+Spawn in NPCs for each of your gamemodes, each with a custom name and destination. You can also change their skin to your liking.
 
-## Features
+# Chunks down to 1.7
+PicoLimbo stops at 1.16 for chunks, but PicoLobby extends the range all the way down to 1.7 so your legacy clients can still load in your beautiful lobby maps.
 
-### 🎮 Wide Version Compatibility
-
-Supports all Minecraft versions from **1.7.2 to 26.1.2** natively, no need for ViaVersion or additional compatibility
-layers.
-
-### ⚡ Ultra-Lightweight & Highly Scalable
-
-Uses **0% CPU while idle** and handles **hundreds of players** under 10 MB RAM.
-[View benchmarks](https://picolimbo.quozul.dev/about/benchmarks.html).
-
-### 👤 Skin Support
-
-Player skins are supported. What else to say about that?
-
-### 🔀 Built-in Proxy Support
-
-Integrates with all major Minecraft proxies:
-
-- Velocity (Modern Forwarding)
-- BungeeCord (Legacy Forwarding)
-- BungeeGuard & BungeeGuardPlus authentication
-
-### ⚙️ Highly Configurable
-
-Customize your server using a simple TOML configuration file, including welcome message, spawn dimension, server list
-MOTD, and more. [View configuration docs](https://picolimbo.quozul.dev/config/introduction.html).
-
-### 🌍 Schematic World (Experimental)
-
-Load a custom world from a schematic file and customize spawn location (1.16+ only).
-
-![PicoLimbo.png](docs/public/PicoLimbo.png)  
-*The screenshot shows just a few of the supported Minecraft versions.*
-
----
-
-## Quick Start
-
-### Pterodactyl
-
-Official eggs for Pterodactyl are provided in the [pterodactyl](./pterodactyl) directory. More information about [PicoLimbo's Pterodactyl eggs](https://picolimbo.quozul.dev/about/installation.html#pterodactyl).
-
-### Docker
-
-```shell
-docker run --rm -p "25565:25565" ghcr.io/quozul/picolimbo:latest
-```
-
-### Java Wrapper
-
-For user wishing to run PicoLimbo inside your Velocity, BungeeCord proxy as a plugin or as a standalone jar file, you can download the [Java Wrapper from Modrinth](https://modrinth.com/plugin/picolimbo-java-wrapper).
-
-### Binary / Standalone
-
-Download from [GitHub Releases](https://github.com/Quozul/PicoLimbo/releases)
-
-For more detailed installation and configuration instructions, please refer to
-the [documentation website](https://picolimbo.quozul.dev/).
-
-## Documentation
-
-**Complete documentation is available at [https://picolimbo.quozul.dev/](https://picolimbo.quozul.dev/)**
-
-For detailed installation instructions, configuration options, and usage examples, please visit the documentation
-website.
-
----
-
-## Similar Projects
-
-- [Limbo](https://github.com/LOOHP/Limbo): Supports only one Minecraft version at a time
-- [NanoLimbo](https://github.com/Nan1t/NanoLimbo): Actively maintained
-  (see [BoomEaro's fork](https://github.com/BoomEaro/NanoLimbo))
-
----
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Quozul/PicoLimbo&type=Date)](https://star-history.com/#Quozul/PicoLimbo&Date)
-
-## Contributing
-
-Contributions are welcome! If you encounter any issues or have suggestions for improvement, please submit an issue or
-pull request on GitHub. Make sure to follow the existing code style and include relevant tests.
-
-1. Fork the repository.
-2. Create a new branch `git checkout -b <branch-name>`.
-3. Make changes and commit `git commit -m 'Add some feature'`.
-4. Push to your fork `git push origin <branch-name>`.
-5. Submit a pull request.
+# Lightweight, high-performance
+Infinitely better performance than any java-based lobby server you will find... don't waste your beloved, pricey RAM! Run on under 75MB of ram and 5% of a modern CPU.
