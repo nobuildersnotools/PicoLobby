@@ -11,6 +11,15 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
+/// Maximum time a single packet write (including the socket flush) may take
+/// before the client is treated as unresponsive. The connection's read side has
+/// its own idle timeout, but writes happen inside select-arm bodies, outside that
+/// timeout. Without this cap a client that stops reading — directly, or via TCP
+/// backpressure propagated through a proxy — parks the write future forever,
+/// leaking the task, socket, connection permit, and lobby session. The resulting
+/// `TimedOut` error is treated as a disconnect by the connection loop.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct ClientData {
     client_state: Arc<Mutex<ClientState>>,
     packet_stream: Arc<Mutex<PacketStream<TcpStream>>>,
@@ -48,7 +57,14 @@ impl ClientData {
     }
 
     pub async fn write_packet(&self, raw_packet: RawPacket) -> Result<(), PacketStreamError> {
-        self.stream().await.write_packet(raw_packet).await
+        let mut stream = self.stream().await;
+        match tokio::time::timeout(WRITE_TIMEOUT, stream.write_packet(raw_packet)).await {
+            Ok(result) => result,
+            Err(_elapsed) => Err(PacketStreamError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out writing packet to client",
+            ))),
+        }
     }
 
     pub async fn read_packet(&self) -> Result<RawPacket, PacketStreamError> {

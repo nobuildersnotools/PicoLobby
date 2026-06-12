@@ -844,6 +844,34 @@ impl ServerState {
         map
     }
 
+    /// Like [`Self::collect_lobby_broadcast_senders`] but groups senders by
+    /// protocol version in a single pass. A broadcast can then encode each packet
+    /// once per version and fan it out, without first building a session-keyed map
+    /// and then re-bucketing it — saving an allocation per broadcast on the hot
+    /// movement/swing/metadata/chat path.
+    pub fn bucket_lobby_broadcast_senders_by_version(
+        &self,
+        recipients: &[LobbyRecipient],
+    ) -> HashMap<ProtocolVersion, Vec<mpsc::Sender<RawPacket>>> {
+        if !self.lobby_enabled {
+            return HashMap::new();
+        }
+        let senders = self
+            .lobby_broadcast_senders
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut buckets: HashMap<ProtocolVersion, Vec<mpsc::Sender<RawPacket>>> = HashMap::new();
+        for r in recipients {
+            if let Some(sender) = senders.get(&r.session_id) {
+                buckets
+                    .entry(r.protocol_version)
+                    .or_default()
+                    .push(sender.clone());
+            }
+        }
+        buckets
+    }
+
     #[allow(dead_code)]
     pub fn plan_lobby_recipients(
         &self,

@@ -31,6 +31,7 @@ impl Default for ClientState {
             pending_lobby_private_message_plan: None,
             last_chat_message_at: None,
             last_command_at: None,
+            last_interaction_at: None,
             pending_lobby_metadata_plan: None,
             pending_lobby_movement_plan: None,
             pending_lobby_swing_plan: None,
@@ -63,6 +64,7 @@ pub struct ClientState {
     pending_lobby_private_message_plan: Option<LobbyPrivateMessagePlan>,
     last_chat_message_at: Option<Instant>,
     last_command_at: Option<Instant>,
+    last_interaction_at: Option<Instant>,
     pending_lobby_metadata_plan: Option<LobbyMetadataPlan>,
     pending_lobby_movement_plan: Option<LobbyMovementPlan>,
     pending_lobby_swing_plan: Option<LobbySwingPlan>,
@@ -236,6 +238,22 @@ impl ClientState {
             return false;
         }
         self.last_command_at = Some(now);
+        true
+    }
+
+    /// Returns `true` if an NPC interaction may be handled now, recording the
+    /// time. Each accepted interaction emits a server-connect plugin message to
+    /// the proxy, so this throttles click/attack spam (from cheat clients) that
+    /// would otherwise flood the proxy with connect requests and the log with
+    /// lines. Independent of chat and command throttling.
+    pub fn check_interaction_rate_limit(&mut self, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        if let Some(last) = self.last_interaction_at
+            && now.duration_since(last) < min_interval
+        {
+            return false;
+        }
+        self.last_interaction_at = Some(now);
         true
     }
 

@@ -17,8 +17,7 @@ use crate::server::packet_registry::{
 use crate::server::shutdown_signal::shutdown_signal;
 use crate::server_state::{
     LobbyChatPlan, LobbyMetadataPlan, LobbyMovementPlan, LobbyNpcSpawnPlan,
-    LobbyPrivateMessagePlan, LobbyRecipient, LobbySessionId, LobbySwingPlan, RenderedScoreboard,
-    ServerState,
+    LobbyPrivateMessagePlan, LobbySessionId, LobbySwingPlan, RenderedScoreboard, ServerState,
 };
 use futures::StreamExt;
 use minecraft_packets::login::login_disconnect_packet::LoginDisconnectPacket;
@@ -180,7 +179,8 @@ impl From<PacketStreamError> for PacketProcessingError {
         match value {
             PacketStreamError::Io(ref e)
                 if e.kind() == std::io::ErrorKind::UnexpectedEof
-                    || e.kind() == std::io::ErrorKind::ConnectionReset =>
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
             {
                 Self::Disconnected
             }
@@ -448,10 +448,10 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
     }
 
     let server_state_guard = server_state.read().await;
-    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
+    let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
-    queue_version_bucketed_packets(&plan.recipients, &senders, "movement", |version| {
+    queue_version_bucketed_packets(&buckets, "movement", |version| {
         movement_visibility_packets(
             version,
             plan.moving_entity_id,
@@ -467,12 +467,10 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
     }
 
     let server_state_guard = server_state.read().await;
-    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
+    let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
-    queue_version_bucketed_packets(&plan.recipients, &senders, "metadata", |_| {
-        metadata_visibility_packets(plan)
-    });
+    queue_version_bucketed_packets(&buckets, "metadata", |_| metadata_visibility_packets(plan));
 }
 
 async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<ServerState>>) {
@@ -481,10 +479,10 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
     }
 
     let server_state_guard = server_state.read().await;
-    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
+    let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
-    queue_version_bucketed_packets(&plan.recipients, &senders, "swing", |_| {
+    queue_version_bucketed_packets(&buckets, "swing", |_| {
         swing_visibility_packets(plan.swinging_entity_id)
     });
 }
@@ -495,11 +493,11 @@ async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerSt
     }
 
     let server_state_guard = server_state.read().await;
-    let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
+    let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
     let component = chat_component_for_plan(plan);
-    queue_version_bucketed_packets(&plan.recipients, &senders, "chat", |version| {
+    queue_version_bucketed_packets(&buckets, "chat", |version| {
         vec![chat_packet_for_version(version, &component)]
     });
 }
@@ -548,37 +546,27 @@ fn broadcast_lifecycle_message_with_guard(
         return;
     }
 
-    let senders = server_state.collect_lobby_broadcast_senders(&plan.recipients);
+    let buckets = server_state.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     let component = lifecycle_message_component_for_plan(plan);
 
-    queue_version_bucketed_packets(&plan.recipients, &senders, "lifecycle message", |version| {
+    queue_version_bucketed_packets(&buckets, "lifecycle message", |version| {
         vec![chat_packet_for_version(version, &component)]
     });
 }
 
 fn queue_version_bucketed_packets<F>(
-    recipients: &[LobbyRecipient],
-    senders: &HashMap<LobbySessionId, mpsc::Sender<RawPacket>>,
+    buckets: &HashMap<ProtocolVersion, Vec<mpsc::Sender<RawPacket>>>,
     context: &str,
     build_packets: F,
 ) where
     F: Fn(ProtocolVersion) -> Vec<PacketRegistry>,
 {
-    let mut buckets: HashMap<ProtocolVersion, Vec<&mpsc::Sender<RawPacket>>> = HashMap::new();
-    for recipient in recipients {
-        if let Some(sender) = senders.get(&recipient.session_id) {
-            buckets
-                .entry(recipient.protocol_version)
-                .or_default()
-                .push(sender);
-        }
-    }
-
     for (version, bucket_senders) in buckets {
+        let version = *version;
         for packet in build_packets(version) {
             match packet.encode_packet(version) {
                 Ok(raw_packet) => {
-                    for sender in &bucket_senders {
+                    for sender in bucket_senders {
                         queue_broadcast_packet(sender, raw_packet.clone(), context);
                     }
                 }
@@ -835,64 +823,66 @@ async fn handle_client(socket: TcpStream, server_state: Arc<RwLock<ServerState>>
 
     let _ = client_data.shutdown().await;
 
-    if was_in_play_state {
-        let client_state = client_data.client().await;
-        let username = client_state.get_username();
-        let lobby_session_id = client_state.lobby_session_id();
-        drop(client_state);
+    let client_state = client_data.client().await;
+    let username = client_state.get_username();
+    let lobby_session_id = client_state.lobby_session_id();
+    drop(client_state);
 
-        {
-            let server_state_guard = server_state.read().await;
-            if server_state_guard.lobby_enabled() {
-                if let Some(plan) =
-                    server_state_guard.unregister_lobby_session_with_leave_plan(lobby_session_id)
-                {
-                    let batches = leave_visibility_batches(&plan);
-                    let senders =
-                        server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
+    {
+        let server_state_guard = server_state.read().await;
+        if server_state_guard.lobby_enabled() {
+            // Always unregister so a session registered during the configuration
+            // phase (configuration.rs registers before the play transition) is
+            // never leaked if the client dropped before its first play packet.
+            // Only fan out a departure when the player actually entered play and
+            // was therefore announced to others; a session that never reached play
+            // was never made visible, so there is nothing to retract.
+            if let Some(plan) =
+                server_state_guard.unregister_lobby_session_with_leave_plan(lobby_session_id)
+                && was_in_play_state
+            {
+                let batches = leave_visibility_batches(&plan);
+                let senders = server_state_guard.collect_lobby_broadcast_senders(&plan.recipients);
 
-                    let batch_count = batches.len();
-                    let mut sent = 0usize;
-                    for batch in batches {
-                        let session_id = batch.recipient.session_id;
-                        let version = batch.recipient.protocol_version;
-                        if let Some(sender) = senders.get(&session_id) {
-                            for packet in batch.packets {
-                                match packet.encode_packet(version) {
-                                    Ok(raw_packet) => {
-                                        queue_broadcast_packet(
-                                            sender,
-                                            raw_packet,
-                                            "leave visibility",
-                                        );
-                                        sent += 1;
-                                    }
-                                    Err(err) => {
-                                        warn!(
-                                            "Failed to encode leave visibility packet for session {:?} version {}: {}",
-                                            session_id,
-                                            version.humanize(),
-                                            err
-                                        );
-                                    }
+                let batch_count = batches.len();
+                let mut sent = 0usize;
+                for batch in batches {
+                    let session_id = batch.recipient.session_id;
+                    let version = batch.recipient.protocol_version;
+                    if let Some(sender) = senders.get(&session_id) {
+                        for packet in batch.packets {
+                            match packet.encode_packet(version) {
+                                Ok(raw_packet) => {
+                                    queue_broadcast_packet(sender, raw_packet, "leave visibility");
+                                    sent += 1;
+                                }
+                                Err(err) => {
+                                    warn!(
+                                        "Failed to encode leave visibility packet for session {:?} version {}: {}",
+                                        session_id,
+                                        version.humanize(),
+                                        err
+                                    );
                                 }
                             }
                         }
                     }
-                    debug!(
-                        "Sent {} lobby leave visibility packets across {} recipients for entity id {}",
-                        sent,
-                        batch_count,
-                        plan.departed_entity_id.get()
-                    );
-                    if let Some(message_plan) = server_state_guard.plan_lobby_leave_message(&plan) {
-                        broadcast_lifecycle_message_with_guard(&server_state_guard, &message_plan);
-                    }
                 }
-            } else {
-                server_state_guard.decrement();
+                debug!(
+                    "Sent {} lobby leave visibility packets across {} recipients for entity id {}",
+                    sent,
+                    batch_count,
+                    plan.departed_entity_id.get()
+                );
+                if let Some(message_plan) = server_state_guard.plan_lobby_leave_message(&plan) {
+                    broadcast_lifecycle_message_with_guard(&server_state_guard, &message_plan);
+                }
             }
+        } else if was_in_play_state {
+            server_state_guard.decrement();
         }
+    }
+    if was_in_play_state {
         info!("{} left the game", username);
     }
 }
