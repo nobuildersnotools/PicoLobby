@@ -10,4 +10,4 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-tokio-test = "0.4.4"
+tokio-test = "0.4.5"
