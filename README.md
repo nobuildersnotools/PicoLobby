@@ -4,7 +4,7 @@
 
 **An ultra-lightweight, multi-version Minecraft lobby server written in Rust - a fork of PicoLimbo.**
 
-*Supports versions 1.7.2 - 26.1.2*
+*Supports versions 1.7.2 - 26.2*
 
 </div>
 
