@@ -388,6 +388,11 @@ fn register_lobby_session_for_play(
     server_state: &ServerState,
 ) -> bool {
     if !server_state.lobby_enabled() {
+        // Use entity ID 1 instead of 0 for the player, matching upstream PicoLimbo.
+        // A player entity ID of 0 breaks firework elytra boosting after the client
+        // is transferred to another server. Lobby mode already assigns unique
+        // non-zero IDs via register_lobby_session.
+        client_state.set_entity_id(1);
         return true;
     }
     if server_state.register_lobby_session(client_state).is_some() {
@@ -1165,7 +1170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_limbo_join_keeps_default_entity_id() {
+    async fn test_limbo_join_assigns_entity_id_one() {
         let mut client_state = client(ProtocolVersion::V1_20_3);
         let server_state = server_state();
         let mut batch = Batch::new();
@@ -1177,8 +1182,8 @@ mod tests {
         else {
             panic!("expected login packet");
         };
-        assert_eq!(packet.entity_id(), 0);
-        assert_eq!(client_state.entity_id(), 0);
+        assert_eq!(packet.entity_id(), 1);
+        assert_eq!(client_state.entity_id(), 1);
         assert_eq!(server_state.online_players(), 0);
     }
 

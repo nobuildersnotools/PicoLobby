@@ -36,7 +36,11 @@ impl SpawnEntityPacket {
 }
 
 fn player_entity_type_id(version: ProtocolVersion) -> i32 {
-    if version.is_after_inclusive(ProtocolVersion::V1_21_11) {
+    if version.is_after_inclusive(ProtocolVersion::V26_2) {
+        // 26.2 inserted a new entity type before `minecraft:player`, shifting
+        // its registry id from 155 (26.1) to 156.
+        156
+    } else if version.is_after_inclusive(ProtocolVersion::V1_21_11) {
         155
     } else if version.is_after_inclusive(ProtocolVersion::V1_21_9) {
         151
@@ -113,5 +117,7 @@ mod tests {
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_7), 149);
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_9), 151);
         assert_eq!(player_entity_type_id(ProtocolVersion::V1_21_11), 155);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V26_1), 155);
+        assert_eq!(player_entity_type_id(ProtocolVersion::V26_2), 156);
     }
 }

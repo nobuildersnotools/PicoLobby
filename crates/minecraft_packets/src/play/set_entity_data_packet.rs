@@ -87,6 +87,11 @@ impl EntityMetadata {
             Self::Pose(_) => 6,
             Self::SkinParts(_) => {
                 if protocol_version.is_after_inclusive(ProtocolVersion::V1_21_9) {
+                    // 26.1 split a new `Avatar` class out of `Player`, but its
+                    // accessors register main-hand (index 15) *before*
+                    // mode-customisation, so displayed-skin-parts stays at index
+                    // 16 — same as 1.21.9. (Entity 0-7, LivingEntity 8-14,
+                    // Avatar.MAIN_HAND 15, Avatar.MODE_CUSTOMISATION 16.)
                     16
                 } else if protocol_version.is_after_inclusive(ProtocolVersion::V1_17) {
                     17
@@ -233,14 +238,25 @@ mod tests {
     #[test]
     fn baseline_metadata_skin_parts_index_shifts_at_v1_21_9() {
         // V1_21 and V1_20_5 both use skin-parts index 17, pose type-id 21.
-        // V26_1 (≥1.21.9) uses index 16, pose type-id 20.
+        // V1_21_9 uses index 16, pose type-id 20.
+        // V26_1/V26_2 split the `Avatar` class out of `Player`, but its
+        // main-hand accessor (index 15) registers before mode-customisation,
+        // so displayed-skin-parts stays at index 16.
         let cases: &[(ProtocolVersion, &[u8])] = &[
             (
                 ProtocolVersion::V1_21,
                 &[0xac, 0x02, 0, 0, 0, 6, 21, 0, 17, 0, 0x7f, 0xff],
             ),
             (
+                ProtocolVersion::V1_21_9,
+                &[0xac, 0x02, 0, 0, 0, 6, 20, 0, 16, 0, 0x7f, 0xff],
+            ),
+            (
                 ProtocolVersion::V26_1,
+                &[0xac, 0x02, 0, 0, 0, 6, 20, 0, 16, 0, 0x7f, 0xff],
+            ),
+            (
+                ProtocolVersion::V26_2,
                 &[0xac, 0x02, 0, 0, 0, 6, 20, 0, 16, 0, 0x7f, 0xff],
             ),
         ];
@@ -267,6 +283,10 @@ mod tests {
             ),
             (
                 ProtocolVersion::V26_1,
+                &[0xac, 0x02, 0, 0, 0x02, 6, 20, 5, 16, 0, 0x7f, 0xff],
+            ),
+            (
+                ProtocolVersion::V26_2,
                 &[0xac, 0x02, 0, 0, 0x02, 6, 20, 5, 16, 0, 0x7f, 0xff],
             ),
         ];

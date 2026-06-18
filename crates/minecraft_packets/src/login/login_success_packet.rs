@@ -8,6 +8,9 @@ pub struct LoginSuccessPacket {
     username: String,
     #[pvn(735..)]
     properties: LengthPaddedVec<Property>,
+    /// Introduced in 26.2 (protocol 776): a per-session UUID.
+    #[pvn(776..)]
+    session_id: UuidAsLongs,
 }
 
 impl LoginSuccessPacket {
@@ -16,6 +19,7 @@ impl LoginSuccessPacket {
             uuid: uuid.into(),
             username: username.to_string(),
             properties: LengthPaddedVec::default(),
+            session_id: Uuid::new_v4().into(),
         }
     }
 }

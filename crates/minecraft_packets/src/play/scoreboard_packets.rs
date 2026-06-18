@@ -235,6 +235,22 @@ impl EncodePacket for SetPlayerTeamPacket {
                     }
                 }
             }
+        } else if protocol_version.is_after_inclusive(ProtocolVersion::V26_2) {
+            // 26.2 reworked the team parameters block: prefix/suffix now follow
+            // the display name directly, the team color became an
+            // `Optional<TeamColor>` (a new 16-value enum with no RESET sentinel,
+            // so "no color" is encoded as an empty optional), and the packed
+            // friendly-flags byte moved to the end.
+            self.display_name.encode(writer, protocol_version)?;
+            self.prefix.encode(writer, protocol_version)?;
+            self.suffix.encode(writer, protocol_version)?;
+            VarInt::new(TEAM_VISIBILITY_ALWAYS).encode(writer, protocol_version)?;
+            VarInt::new(TEAM_COLLISION_ALWAYS).encode(writer, protocol_version)?;
+            Optional::<VarInt>::None.encode(writer, protocol_version)?;
+            0_i8.encode(writer, protocol_version)?;
+            if self.mode == 0 {
+                LengthPaddedVec::new(self.entries.clone()).encode(writer, protocol_version)?;
+            }
         } else {
             self.display_name.encode(writer, protocol_version)?;
             0_i8.encode(writer, protocol_version)?;
@@ -400,6 +416,52 @@ mod tests {
             .unwrap();
         LengthPaddedVec::new(vec!["\u{00a7}0".to_string()])
             .encode(&mut expected, ProtocolVersion::V1_21_5)
+            .unwrap();
+
+        assert_eq!(writer.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn team_packet_reorders_parameters_and_uses_optional_color_from_v26_2() {
+        let packet = SetPlayerTeamPacket::create(
+            "plsb00",
+            Component::new(""),
+            Component::new("Line"),
+            Component::new(""),
+            vec!["\u{00a7}0".to_string()],
+        );
+        let mut writer = BinaryWriter::default();
+        packet.encode(&mut writer, ProtocolVersion::V26_2).unwrap();
+
+        // 26.2 order: name, mode, display name, prefix, suffix, visibility,
+        // collision, Optional<TeamColor>, friendly-flags byte, then entries.
+        let mut expected = BinaryWriter::default();
+        "plsb00"
+            .to_string()
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        0_i8.encode(&mut expected, ProtocolVersion::V26_2).unwrap();
+        Component::new("")
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        Component::new("Line")
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        Component::new("")
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        VarInt::new(TEAM_VISIBILITY_ALWAYS)
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        VarInt::new(TEAM_COLLISION_ALWAYS)
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        Optional::<VarInt>::None
+            .encode(&mut expected, ProtocolVersion::V26_2)
+            .unwrap();
+        0_i8.encode(&mut expected, ProtocolVersion::V26_2).unwrap();
+        LengthPaddedVec::new(vec!["\u{00a7}0".to_string()])
+            .encode(&mut expected, ProtocolVersion::V26_2)
             .unwrap();
 
         assert_eq!(writer.as_slice(), expected.as_slice());

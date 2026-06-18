@@ -383,6 +383,8 @@ mod tests {
             (ProtocolVersion::V1_21, 928),
             (ProtocolVersion::V1_21_4, 961),
             (ProtocolVersion::V1_21_6, 989),
+            (ProtocolVersion::V26_1, 1035),
+            (ProtocolVersion::V26_2, 1063), // 26.2 shifted item IDs vs 26.1
         ] {
             assert_eq!(
                 resolve_item("minecraft:compass", version).map(|(id, _)| id),

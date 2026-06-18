@@ -42,9 +42,11 @@ impl PrecomputedRegistries {
 /// representation used as a key in `ITEM_IDS`.
 fn item_registry_bucket(version: ProtocolVersion) -> &'static str {
     use ProtocolVersion::{
-        V1_17, V1_18, V1_19, V1_20, V1_21, V1_21_2, V1_21_5, V1_21_9, V1_21_11, V26_1,
+        V1_17, V1_18, V1_19, V1_20, V1_21, V1_21_2, V1_21_5, V1_21_9, V1_21_11, V26_1, V26_2,
     };
-    if version.is_after_inclusive(V26_1) {
+    if version.is_after_inclusive(V26_2) {
+        "V26_2"
+    } else if version.is_after_inclusive(V26_1) {
         "V26_1"
     } else if version.is_after_inclusive(V1_21_11) {
         "V1_21_11"
