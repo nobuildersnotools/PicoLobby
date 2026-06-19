@@ -337,13 +337,13 @@ mod tests {
 
     #[test]
     fn npc_skin_player_variant_parses() {
-        let npc = parse_npc("[skin]\nplayer = \"Notch\"\n").unwrap();
+        let npc = parse_npc("skin = { player = \"Notch\" }\n").unwrap();
         assert!(matches!(npc.skin, Some(NpcSkinConfig::Player { player }) if player == "Notch"));
     }
 
     #[test]
     fn npc_skin_texture_variant_parses() {
-        let npc = parse_npc("[skin]\nvalue = \"abc\"\nsignature = \"sig\"\n").unwrap();
+        let npc = parse_npc("skin = { value = \"abc\", signature = \"sig\" }\n").unwrap();
         assert!(matches!(
             npc.skin,
             Some(NpcSkinConfig::Texture { value, signature })
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn npc_skin_texture_variant_allows_missing_signature() {
-        let npc = parse_npc("[skin]\nvalue = \"abc\"\n").unwrap();
+        let npc = parse_npc("skin = { value = \"abc\" }\n").unwrap();
         assert!(matches!(
             npc.skin,
             Some(NpcSkinConfig::Texture { value, signature })
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn npc_skin_without_recognised_fields_is_rejected() {
-        assert!(parse_npc("[skin]\nnope = \"x\"\n").is_err());
+        assert!(parse_npc("skin = { nope = \"x\" }\n").is_err());
     }
 
     #[test]

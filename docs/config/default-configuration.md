@@ -117,12 +117,9 @@ tab_list_remove_delay_ms = 3000
 # Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
 # NPC spawns skinless without blocking startup.
 # Mirror an existing account by name or UUID (resolved from Mojang at startup):
-# [lobby.npcs.skin]
-# player = "Notch"
+# skin = { player = "Notch" }
 # Or provide a raw signed textures property (offline; signature is optional):
-# [lobby.npcs.skin]
-# value = "ewogICJ0aW1lc3RhbXAiIDog..."
-# signature = "GnG2..."
+# skin = { value = "ewogICJ0aW1lc3RhbXAiIDog...", signature = "GnG2..." }
 
 [compression]
 threshold = -1

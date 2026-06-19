@@ -144,27 +144,26 @@ fn create_default_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError>
     Ok(cfg)
 }
 
-/// Commented `[lobby.npcs.skin]` example injected into freshly generated configs.
+/// Commented inline `skin = { ... }` example injected into freshly generated
+/// configs.
 ///
 /// The NPC `skin` field is optional and omitted from serialization when unset
 /// (no skin = default Steve/Alex), so it never appears in the generated file on
-/// its own. We surface it here as a discoverable, copy-pasteable example.
+/// its own. We surface it here as a discoverable, copy-pasteable example that is
+/// set inline on the NPC entry itself.
 const NPC_SKIN_EXAMPLE: &str = "\
 # Optional skin for the [[lobby.npcs]] entry above. Omit for the default skin.
 # Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
 # NPC spawns skinless without blocking startup.
 # Mirror an existing account by name or UUID (resolved from Mojang at startup):
-# [lobby.npcs.skin]
-# player = \"Notch\"
+# skin = { player = \"Notch\" }
 # Or provide a raw signed textures property (offline; signature is optional):
-# [lobby.npcs.skin]
-# value = \"ewogICJ0aW1lc3RhbXAiIDog...\"
-# signature = \"GnG2...\"
+# skin = { value = \"ewogICJ0aW1lc3RhbXAiIDog...\", signature = \"GnG2...\" }
 ";
 
 /// Insert [`NPC_SKIN_EXAMPLE`] immediately after the first `[[lobby.npcs]]`
-/// block, before the following section, so the commented `[lobby.npcs.skin]`
-/// lands in a position where it is valid TOML when uncommented.
+/// block, before the following section, so the commented `skin = { ... }` line
+/// lands as a key of that NPC entry and is valid TOML when uncommented.
 fn annotate_npc_skin_example(toml_str: &str) -> String {
     let Some(npc_pos) = toml_str.find("[[lobby.npcs]]") else {
         return toml_str.to_string();
@@ -276,9 +275,8 @@ mod tests {
         let annotated = annotate_npc_skin_example(&toml_str);
 
         // The commented example is present and sits before the next section.
-        assert!(annotated.contains("# [lobby.npcs.skin]"));
-        assert!(annotated.contains("# player = \"Notch\""));
-        let skin_pos = annotated.find("# [lobby.npcs.skin]").unwrap();
+        assert!(annotated.contains("# skin = { player = \"Notch\" }"));
+        let skin_pos = annotated.find("# skin = { player = \"Notch\" }").unwrap();
         let npc_pos = annotated.find("[[lobby.npcs]]").unwrap();
         let next_section = annotated.find("[lobby.private_messages]").unwrap();
         assert!(npc_pos < skin_pos && skin_pos < next_section);
@@ -292,10 +290,10 @@ mod tests {
         let toml_str = toml::to_string_pretty(&Config::default()).unwrap();
         let annotated = annotate_npc_skin_example(&toml_str);
 
-        // Uncomment only the player-variant lines of the injected example.
+        // Uncomment only the player-variant line of the injected example.
         let uncommented = annotated.replace(
-            "# [lobby.npcs.skin]\n# player = \"Notch\"",
-            "[lobby.npcs.skin]\nplayer = \"Notch\"",
+            "# skin = { player = \"Notch\" }",
+            "skin = { player = \"Notch\" }",
         );
         let config: Config = toml::from_str(&uncommented).unwrap();
 
