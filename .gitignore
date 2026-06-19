@@ -13,3 +13,5 @@ node_modules/
 server.toml
 /docs/lobby/
 schematic.schem
+/data/_viacache
+/data/_mcdatacache

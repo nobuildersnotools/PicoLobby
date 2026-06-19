@@ -121,12 +121,10 @@ impl CircularChunkPacketIterator {
         let (center_x, center_z) = center_chunk;
         let paste_origin = Coordinates::new_uniform(0);
 
-        let mapping_version = if protocol_version.is_before_inclusive(ProtocolVersion::V1_15_2) {
-            ProtocolVersion::V1_16
-        } else {
-            protocol_version
-        };
-        let schematic_context: Option<WorldContext> = get_block_report_id_mapping(mapping_version)
+        // Every supported version now has its own InternalId → native block id
+        // table (flat for 1.13+, block_id<<4|metadata for 1.7-1.12), derived from
+        // the ViaVersion mappings, so no cross-version pivot is needed.
+        let schematic_context: Option<WorldContext> = get_block_report_id_mapping(protocol_version)
             .map_or(None, |report_id_mapping| {
                 world.map(|world_arc| WorldContext {
                     paste_origin,

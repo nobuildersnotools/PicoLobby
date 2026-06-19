@@ -1,15 +1,13 @@
 pub mod block_entity_loader;
 pub mod blocks_report_loader;
-pub mod build_report_mappings;
 pub mod internal_mapping;
-pub mod legacy_mapping_loader;
 mod light;
+pub mod via_mapping;
 
 use crate::block_entity_loader::load_block_entity_data;
 use crate::blocks_report_loader::{BlocksReport, load_block_data};
-use crate::build_report_mappings::build_report_mappings;
 use crate::internal_mapping::build_internal_id_mapping;
-use crate::legacy_mapping_loader::{build_legacy_mapping, load_legacy_json};
+use crate::via_mapping::build_via_report_mappings;
 use minecraft_protocol::prelude::{BinaryWriter, EncodePacket};
 use proc_macro2::{Ident, Span};
 use protocol_version::protocol_version::ProtocolVersion;
@@ -21,6 +19,19 @@ fn main() -> anyhow::Result<()> {
     let out_dir = env::var("OUT_DIR")?;
     let out_path = Path::new(&out_dir);
 
+    // Rebuild when the committed source data changes (Mojang reports + Via tables).
+    let generated_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join("data").join("generated"));
+    if let Some(generated) = generated_dir {
+        println!(
+            "cargo:rerun-if-changed={}",
+            generated.join("Any/via").display()
+        );
+        println!("cargo:rerun-if-changed={}", generated.display());
+    }
+
     // 1. Load all blocks reports
     let blocks_reports: Vec<BlocksReport> = load_block_data()?;
 
@@ -31,15 +42,10 @@ fn main() -> anyhow::Result<()> {
     let save_path = out_path.join("internal_mapping");
     write(&internal_mapping, &save_path)?;
 
-    // 4. Build and serialize legacy block mapping (V1_16 state ID → pre-flattening id+meta)
-    let legacy_json = load_legacy_json()?;
-    let legacy_mapping = build_legacy_mapping(&blocks_reports, &legacy_json);
-    let legacy_mapping_path = out_path.join("legacy_block_mapping");
-    write(&legacy_mapping, &legacy_mapping_path)?;
-
-    // 5. Create report mappings
+    // 4. Create per-version report mappings (InternalId → native block id) from the
+    //    committed ViaVersion-derived tables under data/generated/Any/via.
     let mut mappings_arms = Vec::new();
-    let report_mappings = build_report_mappings(&blocks_reports, &internal_mapping);
+    let report_mappings = build_via_report_mappings(&internal_mapping)?;
     for mapping in report_mappings {
         let file_name = format!("version_mapping_{}", mapping.protocol_version);
         let save_path = out_path.join(file_name);

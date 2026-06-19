@@ -2,9 +2,7 @@ use crate::play::data::chunk_context::{VoidChunkContext, WorldContext};
 use crate::play::data::chunk_section::ChunkSection;
 use crate::play::data::encode_as_bytes::EncodeAsBytes;
 use crate::play::data::palette_container::PaletteContainer;
-use blocks_report::{
-    BlockEntityTypeLookup, LegacyEntry, get_block_entity_lookup, get_legacy_block_mapping,
-};
+use blocks_report::{BlockEntityTypeLookup, get_block_entity_lookup};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use minecraft_protocol::prelude::*;
@@ -367,12 +365,11 @@ fn encode_v1_8_sections(
         return Ok(());
     }
 
-    let legacy_mapping = get_legacy_block_mapping();
     let mut block_lights = Vec::with_capacity(sections.len());
     let mut sky_lights = Vec::with_capacity(sections.len());
 
     for section in sections {
-        for state in legacy_block_states(section, legacy_mapping) {
+        for state in legacy_block_states(section) {
             write_v1_8_block_state(writer, state)?;
         }
         block_lights.push(vec![0x00; 2048]);
@@ -405,11 +402,9 @@ fn encode_pre_flattening_section(
     section: &ChunkSection,
     writer: &mut BinaryWriter,
 ) -> Result<(), BinaryWriterError> {
-    let legacy_mapping = get_legacy_block_mapping();
-
     let mut block_ids = Vec::with_capacity(4096);
     let mut metas = Vec::with_capacity(4096);
-    for state in legacy_block_states(section, legacy_mapping) {
+    for state in legacy_block_states(section) {
         block_ids.push((state >> 4) as u8);
         metas.push((state & 0xF) as u8);
     }
@@ -426,24 +421,9 @@ fn encode_v1_9_to_v1_12_section(
     writer: &mut BinaryWriter,
     protocol_version: ProtocolVersion,
 ) -> Result<(), BinaryWriterError> {
-    let legacy_mapping = get_legacy_block_mapping();
-    let v1_16_ids = section_block_ids(section);
-
-    // Map V1_16 state IDs → pre-flattening state IDs: (block_id << 4) | metadata
-    let legacy_ids: Vec<u32> = v1_16_ids
-        .iter()
-        .map(|&sid| {
-            let entry = legacy_mapping
-                .get(sid as usize)
-                .copied()
-                .unwrap_or(LegacyEntry::NO_MAPPING);
-            if entry.has_mapping() {
-                (u32::from(entry.block_id) << 4) | u32::from(entry.metadata)
-            } else {
-                0
-            }
-        })
-        .collect();
+    // The section already holds this version's native pre-Flattening ids
+    // (block_id << 4 | metadata), so they can be paletted directly.
+    let legacy_ids: Vec<u32> = section_block_ids(section);
 
     let mut palette = Vec::<u32>::new();
     let mut palette_indices = Vec::with_capacity(legacy_ids.len());
@@ -477,20 +457,12 @@ fn encode_v1_9_to_v1_12_section(
     Ok(())
 }
 
-fn legacy_block_states(section: &ChunkSection, legacy_mapping: &[LegacyEntry]) -> Vec<u16> {
+/// The section's per-version native block ids as `u16`. For pre-Flattening
+/// targets these are already `block_id << 4 | metadata`, so no remap is needed.
+fn legacy_block_states(section: &ChunkSection) -> Vec<u16> {
     section_block_ids(section)
         .into_iter()
-        .map(|sid| {
-            let entry = legacy_mapping
-                .get(sid as usize)
-                .copied()
-                .unwrap_or(LegacyEntry::NO_MAPPING);
-            if entry.has_mapping() {
-                (u16::from(entry.block_id) << 4) | u16::from(entry.metadata)
-            } else {
-                0
-            }
-        })
+        .map(|sid| sid as u16)
         .collect()
 }
 

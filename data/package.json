@@ -5,7 +5,8 @@
     "type": "module",
     "scripts": {
         "start": "node src/generate.ts",
-        "profiles": "node src/launcher_profiles.ts"
+        "profiles": "node src/launcher_profiles.ts",
+        "via-blocks": "node src/generate_via_block_mappings.ts"
     },
     "keywords": [],
     "author": "",
