@@ -268,7 +268,7 @@ impl Default for LobbyConfig {
                 server: "survival".to_string(),
                 item: default_selector_entry_item(),
                 lore: default_selector_entry_lore(),
-                slot: None,
+                slot: Some(0),
                 enchanted: false,
             }],
             selector: Some(SelectorItemConfig::default()),
