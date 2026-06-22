@@ -172,6 +172,14 @@ fn inline_npc_skins(toml_str: &str) -> String {
             if out.last().is_some_and(|l| l.trim().is_empty()) {
                 out.pop();
             }
+            out.push(
+                "# skin: use `player = \"<name or uuid>\"` to copy a real account's skin,"
+                    .to_string(),
+            );
+            out.push(
+                "# or `value = \"<base64>\"` with an optional `signature = \"<sig>\"` for a raw texture."
+                    .to_string(),
+            );
             out.push(format!("skin = {{ {} }}", kvs.join(", ")));
             continue;
         }
@@ -294,6 +302,9 @@ mod tests {
 
         assert!(inlined.contains("skin = { value = \"abc\", signature = \"sig\" }"));
         assert!(!inlined.contains("[lobby.npcs.skin]"));
+        // The generated config explains both skin sources just above the entry.
+        assert!(inlined.contains("# skin: use `player ="));
+        assert!(inlined.contains("`value ="));
         toml::from_str::<Config>(&inlined).unwrap();
     }
 
