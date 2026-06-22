@@ -292,7 +292,9 @@ impl Default for LobbyConfig {
                 yaw: 180.0,
                 pitch: 0.0,
                 tab_list_remove_delay_ms: DEFAULT_NPC_TAB_LIST_REMOVE_DELAY_MS,
-                skin: None,
+                skin: Some(NpcSkinConfig::Player {
+                    player: "Notch".to_string(),
+                }),
             }],
             private_messages: PrivateMessagesConfig::default(),
             antispam: AntispamConfig::default(),

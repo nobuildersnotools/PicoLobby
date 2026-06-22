@@ -139,60 +139,49 @@ pub fn load_or_create<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
 fn create_default_config<P: AsRef<Path>>(path: P) -> Result<Config, ConfigError> {
     let cfg = Config::default();
     let toml_str = toml::to_string_pretty(&cfg)?;
-    let toml_str = annotate_npc_skin_example(&toml_str);
+    let toml_str = inline_npc_skins(&toml_str);
     fs::write(path, toml_str)?;
     Ok(cfg)
 }
 
-/// Commented inline `skin = { ... }` example injected into freshly generated
-/// configs.
+/// Rewrite serialized NPC skins into the inline `skin = { ... }` form.
 ///
-/// The NPC `skin` field is optional and omitted from serialization when unset
-/// (no skin = default Steve/Alex), so it never appears in the generated file on
-/// its own. We surface it here as a discoverable, copy-pasteable example that is
-/// set inline on the NPC entry itself.
-const NPC_SKIN_EXAMPLE: &str = "\
-# Optional skin for the [[lobby.npcs]] entry above. Omit for the default skin.
-# Skins render on Minecraft 1.8+ clients only; if a skin fails to resolve the
-# NPC spawns skinless without blocking startup.
-# Mirror an existing account by name or UUID (resolved from Mojang at startup):
-# skin = { player = \"Notch\" }
-# Or provide a raw signed textures property (offline; signature is optional):
-# skin = { value = \"ewogICJ0aW1lc3RhbXAiIDog...\", signature = \"GnG2...\" }
-";
-
-/// Insert [`NPC_SKIN_EXAMPLE`] immediately after the first `[[lobby.npcs]]`
-/// block, before the following section, so the commented `skin = { ... }` line
-/// lands as a key of that NPC entry and is valid TOML when uncommented.
-fn annotate_npc_skin_example(toml_str: &str) -> String {
-    let Some(npc_pos) = toml_str.find("[[lobby.npcs]]") else {
-        return toml_str.to_string();
-    };
-
-    // The next line beginning with `[` after the NPC block is the following
-    // section header (NPC field lines never start with `[`). If there is none,
-    // the NPC block is the final section and we append at the end.
-    let insert_at = toml_str[npc_pos..]
-        .find("\n[")
-        .map_or(toml_str.len(), |rel| npc_pos + rel + 1);
-    let (head, tail) = toml_str.split_at(insert_at);
-
-    let mut out = String::with_capacity(toml_str.len() + NPC_SKIN_EXAMPLE.len() + 2);
-    out.push_str(head);
-    // Ensure a blank line separates the example from the NPC block above.
-    if !head.ends_with("\n\n") {
-        out.push_str(if head.ends_with('\n') { "\n" } else { "\n\n" });
-    }
-    out.push_str(NPC_SKIN_EXAMPLE);
-    if tail.is_empty() {
-        if !out.ends_with('\n') {
-            out.push('\n');
+/// `toml::to_string_pretty` renders the optional [`NpcSkinConfig`] field as a
+/// standalone `[lobby.npcs.skin]` sub-table (TOML document serializers never
+/// emit inline tables). Both forms deserialize identically, but generated
+/// configs use the inline `skin = { ... }` key on the owning `[[lobby.npcs]]`
+/// entry, so we fold each sub-table back into that entry's body here. NPCs with
+/// no skin serialize nothing and are left untouched.
+fn inline_npc_skins(toml_str: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut lines = toml_str.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim_start().starts_with("[lobby.npcs.skin]") {
+            // Collect the sub-table's `key = value` body lines.
+            let mut kvs: Vec<&str> = Vec::new();
+            while let Some(peek) = lines.peek() {
+                let trimmed = peek.trim();
+                if trimmed.is_empty() || trimmed.starts_with('[') {
+                    break;
+                }
+                kvs.push(trimmed);
+                lines.next();
+            }
+            // Drop the blank line that separated the entry's scalar fields from
+            // the sub-table header so the inline key sits flush in the body.
+            if out.last().is_some_and(|l| l.trim().is_empty()) {
+                out.pop();
+            }
+            out.push(format!("skin = {{ {} }}", kvs.join(", ")));
+            continue;
         }
-    } else {
-        out.push('\n');
-        out.push_str(tail);
+        out.push(line.to_string());
     }
-    out
+    let mut joined = out.join("\n");
+    if toml_str.ends_with('\n') {
+        joined.push('\n');
+    }
+    joined
 }
 
 #[cfg(test)]
@@ -270,36 +259,53 @@ mod tests {
     }
 
     #[test]
-    fn generated_config_documents_npc_skin_and_still_parses() {
+    fn generated_config_inlines_npc_skin_and_still_parses() {
         let toml_str = toml::to_string_pretty(&Config::default()).unwrap();
-        let annotated = annotate_npc_skin_example(&toml_str);
+        let inlined = inline_npc_skins(&toml_str);
 
-        // The commented example is present and sits before the next section.
-        assert!(annotated.contains("# skin = { player = \"Notch\" }"));
-        let skin_pos = annotated.find("# skin = { player = \"Notch\" }").unwrap();
-        let npc_pos = annotated.find("[[lobby.npcs]]").unwrap();
-        let next_section = annotated.find("[lobby.private_messages]").unwrap();
+        // The skin is emitted as a real inline key on the NPC entry, not as the
+        // old `[lobby.npcs.skin]` sub-table.
+        assert!(inlined.contains("skin = { player = \"Notch\" }"));
+        assert!(!inlined.contains("[lobby.npcs.skin]"));
+        let skin_pos = inlined.find("skin = { player = \"Notch\" }").unwrap();
+        let npc_pos = inlined.find("[[lobby.npcs]]").unwrap();
+        let next_section = inlined.find("[lobby.private_messages]").unwrap();
         assert!(npc_pos < skin_pos && skin_pos < next_section);
 
-        // Comments are ignored, so the generated file parses unchanged.
-        toml::from_str::<Config>(&annotated).unwrap();
-    }
-
-    #[test]
-    fn uncommented_skin_example_is_valid_config() {
-        let toml_str = toml::to_string_pretty(&Config::default()).unwrap();
-        let annotated = annotate_npc_skin_example(&toml_str);
-
-        // Uncomment only the player-variant line of the injected example.
-        let uncommented = annotated.replace(
-            "# skin = { player = \"Notch\" }",
-            "skin = { player = \"Notch\" }",
-        );
-        let config: Config = toml::from_str(&uncommented).unwrap();
-
+        // The folded document parses back into the same configuration.
+        let config: Config = toml::from_str(&inlined).unwrap();
         assert!(matches!(
             config.lobby.npcs[0].skin,
             Some(crate::configuration::lobby::NpcSkinConfig::Player { ref player }) if player == "Notch"
         ));
+    }
+
+    #[test]
+    fn inline_npc_skins_folds_texture_variant_with_signature() {
+        // The default NPC carries a player skin; swap in a texture skin to
+        // exercise the multi-key inline form.
+        let mut cfg = Config::default();
+        cfg.lobby.npcs[0].skin = Some(crate::configuration::lobby::NpcSkinConfig::Texture {
+            value: "abc".to_string(),
+            signature: Some("sig".to_string()),
+        });
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        let inlined = inline_npc_skins(&toml_str);
+
+        assert!(inlined.contains("skin = { value = \"abc\", signature = \"sig\" }"));
+        assert!(!inlined.contains("[lobby.npcs.skin]"));
+        toml::from_str::<Config>(&inlined).unwrap();
+    }
+
+    #[test]
+    fn inline_npc_skins_leaves_skinless_npcs_untouched() {
+        let mut cfg = Config::default();
+        cfg.lobby.npcs[0].skin = None;
+        let toml_str = toml::to_string_pretty(&cfg).unwrap();
+        let inlined = inline_npc_skins(&toml_str);
+
+        assert!(!inlined.contains("skin = "));
+        assert!(!inlined.contains("[lobby.npcs.skin]"));
+        toml::from_str::<Config>(&inlined).unwrap();
     }
 }
