@@ -106,25 +106,16 @@ impl LegacyLightData {
         let total_light_sections = Self::total_light_sections(dimension_height);
         let all_sections_mask = VarInt::new(Self::all_sections_mask(total_light_sections));
 
-        let mut sky_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        sky_light_arrays.push(Light::full_sky());
-        for section in sky_light_sections {
-            sky_light_arrays.push(Light::new(section.clone()));
-        }
-        sky_light_arrays.push(Light::full_sky());
-        while sky_light_arrays.len() < total_light_sections as usize {
-            sky_light_arrays.push(Light::full_sky());
-        }
-
-        let mut block_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        block_light_arrays.push(Light::no_block());
-        for section in block_light_sections {
-            block_light_arrays.push(Light::new(section.clone()));
-        }
-        block_light_arrays.push(Light::no_block());
-        while block_light_arrays.len() < total_light_sections as usize {
-            block_light_arrays.push(Light::no_block());
-        }
+        let sky_light_arrays = Light::padded_arrays(
+            sky_light_sections,
+            total_light_sections as usize,
+            Light::full_sky,
+        );
+        let block_light_arrays = Light::padded_arrays(
+            block_light_sections,
+            total_light_sections as usize,
+            Light::no_block,
+        );
 
         Self {
             sky_light_mask: all_sections_mask.clone(),

@@ -12,9 +12,6 @@ use thiserror::Error;
 /// Each byte contains two 4-bit light values (high nibble and low nibble).
 pub type LightSection = Vec<i8>;
 
-/// Alias for backward compatibility
-pub type SkyLightSection = LightSection;
-
 pub struct World {
     world_sections: Vec<Palette>,
     size_in_chunks: Coordinates,

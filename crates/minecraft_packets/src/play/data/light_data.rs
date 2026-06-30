@@ -41,6 +41,25 @@ impl Light {
             block_light_array: Arc::clone(NO_BLOCK_LIGHT.get_or_init(|| vec![0; 2048].into())),
         }
     }
+
+    /// Builds a per-section light array list: an `edge` array for the section
+    /// below the chunk, one array per `sections` entry, then `edge` arrays
+    /// padding out to `total_light_sections` (covering the section above the
+    /// chunk and any sections the world doesn't have light data for).
+    pub(crate) fn padded_arrays(
+        sections: &[LightSection],
+        total_light_sections: usize,
+        edge: fn() -> Light,
+    ) -> Vec<Light> {
+        let mut arrays = Vec::with_capacity(total_light_sections);
+        arrays.push(edge());
+        arrays.extend(sections.iter().map(|section| Light::new(section.clone())));
+        arrays.push(edge());
+        while arrays.len() < total_light_sections {
+            arrays.push(edge());
+        }
+        arrays
+    }
 }
 
 impl EncodePacket for Light {
@@ -68,25 +87,16 @@ impl LightData {
         let all_sections_mask_val = (1u64 << total_light_sections) - 1;
         let all_sections_mask = BitSet::new(vec![all_sections_mask_val as i64]);
 
-        let mut sky_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        sky_light_arrays.push(Light::full_sky());
-        for section in sky_light_sections {
-            sky_light_arrays.push(Light::new(section.clone()));
-        }
-        sky_light_arrays.push(Light::full_sky());
-        while sky_light_arrays.len() < total_light_sections as usize {
-            sky_light_arrays.push(Light::full_sky());
-        }
-
-        let mut block_light_arrays = Vec::with_capacity(total_light_sections as usize);
-        block_light_arrays.push(Light::no_block());
-        for section in block_light_sections {
-            block_light_arrays.push(Light::new(section.clone()));
-        }
-        block_light_arrays.push(Light::no_block());
-        while block_light_arrays.len() < total_light_sections as usize {
-            block_light_arrays.push(Light::no_block());
-        }
+        let sky_light_arrays = Light::padded_arrays(
+            sky_light_sections,
+            total_light_sections as usize,
+            Light::full_sky,
+        );
+        let block_light_arrays = Light::padded_arrays(
+            block_light_sections,
+            total_light_sections as usize,
+            Light::no_block,
+        );
 
         Self {
             sky_light_mask: all_sections_mask.clone(),

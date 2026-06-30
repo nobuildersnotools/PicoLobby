@@ -125,7 +125,8 @@ impl CircularChunkPacketIterator {
         // table (flat for 1.13+, block_id<<4|metadata for 1.7-1.12), derived from
         // the ViaVersion mappings, so no cross-version pivot is needed.
         let schematic_context: Option<WorldContext> = get_block_report_id_mapping(protocol_version)
-            .map_or(None, |report_id_mapping| {
+            .ok()
+            .and_then(|report_id_mapping| {
                 world.map(|world_arc| WorldContext {
                     paste_origin,
                     world: world_arc,

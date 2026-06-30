@@ -311,19 +311,7 @@ fn encode_flattened_section_blocks(
     protocol_version: ProtocolVersion,
 ) -> Result<(), BinaryWriterError> {
     let ids = section_block_ids(section);
-    let mut palette = Vec::<u32>::new();
-    let mut palette_indices = Vec::with_capacity(ids.len());
-
-    for id in ids {
-        let index = palette
-            .iter()
-            .position(|entry| *entry == id)
-            .unwrap_or_else(|| {
-                palette.push(id);
-                palette.len() - 1
-            });
-        palette_indices.push(index as u32);
-    }
+    let (palette, palette_indices) = build_indirect_palette(&ids);
 
     let bits_per_block = bits_needed(palette.len()).clamp(4, 8) as u8;
     bits_per_block.encode(writer, protocol_version)?;
@@ -424,19 +412,7 @@ fn encode_v1_9_to_v1_12_section(
     // The section already holds this version's native pre-Flattening ids
     // (block_id << 4 | metadata), so they can be paletted directly.
     let legacy_ids: Vec<u32> = section_block_ids(section);
-
-    let mut palette = Vec::<u32>::new();
-    let mut palette_indices = Vec::with_capacity(legacy_ids.len());
-    for &id in &legacy_ids {
-        let index = palette
-            .iter()
-            .position(|&entry| entry == id)
-            .unwrap_or_else(|| {
-                palette.push(id);
-                palette.len() - 1
-            });
-        palette_indices.push(index as u32);
-    }
+    let (palette, palette_indices) = build_indirect_palette(&legacy_ids);
 
     let bits_per_block = bits_needed(palette.len()).clamp(4, 8) as u8;
     bits_per_block.encode(writer, protocol_version)?;
@@ -499,6 +475,26 @@ fn section_block_ids(section: &ChunkSection) -> Vec<u32> {
     }
 }
 
+/// Builds a deduplicated palette (in first-occurrence order) for `ids`,
+/// alongside each id's index into that palette.
+fn build_indirect_palette(ids: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    let mut palette = Vec::<u32>::new();
+    let mut palette_indices = Vec::with_capacity(ids.len());
+
+    for &id in ids {
+        let index = palette
+            .iter()
+            .position(|&entry| entry == id)
+            .unwrap_or_else(|| {
+                palette.push(id);
+                palette.len() - 1
+            });
+        palette_indices.push(index as u32);
+    }
+
+    (palette, palette_indices)
+}
+
 fn unpack_padded(data: &[u64], bits_per_entry: u8, entry_count: usize) -> Vec<u32> {
     let entries_per_long = 64 / usize::from(bits_per_entry);
     let mask = (1u64 << bits_per_entry) - 1;
@@ -540,7 +536,7 @@ fn bits_needed(n: usize) -> usize {
     if n <= 1 {
         1
     } else {
-        usize::BITS as usize - (n - 1).leading_zeros() as usize
+        (n - 1).ilog2() as usize + 1
     }
 }
 

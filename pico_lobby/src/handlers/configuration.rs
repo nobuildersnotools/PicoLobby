@@ -141,7 +141,7 @@ fn prepare_chunk_packets(
     dimension: ProtocolDimension,
     position: (f64, f64),
     server_state: &ServerState,
-) -> Result<Option<PreparedChunkPackets>, PacketHandlerError> {
+) -> Result<PreparedChunkPackets, PacketHandlerError> {
     let registry_provider = PrecomputedRegistries::new(protocol_version);
     let center_chunk = world_position_to_chunk_position(position)?;
     let biome_id = registry_provider
@@ -175,7 +175,7 @@ fn prepare_chunk_packets(
         })
         .map_err(PacketHandlerError::Custom)?;
 
-    Ok(Some((center_chunk, packets)))
+    Ok((center_chunk, packets))
 }
 
 fn legacy_dimension_info(dimension: ProtocolDimension) -> DimensionInfo {
@@ -308,21 +308,21 @@ pub fn send_play_packets(
         &placeholders,
     )?;
 
-    if let Some((center_chunk, chunk_packets)) = chunk_packets {
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_20_3) {
-            // Send Game Event
-            let packet = GameEventPacket::start_waiting_for_chunks(0.0);
-            batch.queue(|| PacketRegistry::GameEvent(packet));
-        }
+    let (center_chunk, chunk_packets) = chunk_packets;
 
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_19) {
-            let packet = SetCenterChunkPacket::new(center_chunk.0, center_chunk.1);
-            batch.queue(|| PacketRegistry::SetCenterChunk(packet));
-        }
-
-        // Send Chunk Data and Update Light
-        batch.chain_raw_packet_cache(chunk_packets);
+    if protocol_version.is_after_inclusive(ProtocolVersion::V1_20_3) {
+        // Send Game Event
+        let packet = GameEventPacket::start_waiting_for_chunks(0.0);
+        batch.queue(|| PacketRegistry::GameEvent(packet));
     }
+
+    if protocol_version.is_after_inclusive(ProtocolVersion::V1_19) {
+        let packet = SetCenterChunkPacket::new(center_chunk.0, center_chunk.1);
+        batch.queue(|| PacketRegistry::SetCenterChunk(packet));
+    }
+
+    // Send Chunk Data and Update Light
+    batch.chain_raw_packet_cache(chunk_packets);
 
     send_selector_item_packet(batch, client_state, server_state);
     send_visibility_toggle_item_packet(batch, client_state, server_state);
