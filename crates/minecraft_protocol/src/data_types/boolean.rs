@@ -18,12 +18,7 @@ impl EncodePacket for bool {
         writer: &mut BinaryWriter,
         _protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
-        if *self {
-            writer.write::<u8>(&0x01_u8)?;
-        } else {
-            writer.write::<u8>(&0x00_u8)?;
-        }
-        Ok(())
+        writer.write::<u8>(&u8::from(*self))
     }
 }
 

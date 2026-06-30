@@ -190,9 +190,9 @@ fn load_all_protocol_data() -> HashMap<String, RawPacketData> {
 
             if report_path.exists() {
                 let content = fs::read_to_string(&report_path)
-                    .unwrap_or_else(|_| panic!("Failed to read {:?}", report_path));
+                    .unwrap_or_else(|_| panic!("Failed to read {report_path:?}"));
                 let report: RawPacketData = serde_json::from_str(&content)
-                    .unwrap_or_else(|e| panic!("Failed to parse {:?}: {}", report_path, e));
+                    .unwrap_or_else(|e| panic!("Failed to parse {report_path:?}: {e}"));
                 all_data.insert(version_name, report);
             }
         }

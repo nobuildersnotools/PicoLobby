@@ -19,13 +19,7 @@ pub fn expand_parse_out_packet_derive(input: TokenStream) -> TokenStream {
 
     let field_parsers = fields.iter().map(|field| {
         let field_name = &field.ident;
-        let version_range = field.attrs.iter().find_map(|attr| {
-            if attr.path().is_ident("pvn") {
-                Some(attr.parse_args::<syn::Expr>().unwrap())
-            } else {
-                None
-            }
-        });
+        let version_range = crate::pvn_attr::version_range(field);
 
         if let Some(version_range) = version_range {
             quote! {

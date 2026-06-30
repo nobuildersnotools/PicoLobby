@@ -11,7 +11,7 @@ pub struct Position {
 
 impl Position {
     pub fn new(x: f64, y: f64, z: f64) -> Self {
-        Position { x, y, z }
+        Self { x, y, z }
     }
 }
 
@@ -24,7 +24,7 @@ impl DecodePacket for Position {
         let x = (val >> 38) as f64;
         let y = (val << 52 >> 52) as f64;
         let z = (val << 26 >> 38) as f64;
-        Ok(Position { x, y, z })
+        Ok(Self { x, y, z })
     }
 }
 

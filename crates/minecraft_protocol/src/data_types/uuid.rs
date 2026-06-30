@@ -11,7 +11,7 @@ impl DecodePacket for Uuid {
         protocol_version: ProtocolVersion,
     ) -> Result<Self, BinaryReaderError> {
         if protocol_version >= ProtocolVersion::V1_16 {
-            reader.read::<Uuid>()
+            reader.read::<Self>()
         } else {
             Err(BinaryReaderError::Custom)
         }

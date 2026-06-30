@@ -41,10 +41,10 @@ impl DecodePacket for Vec<u8> {
         let remaining_count = reader.remaining();
         let mut buffer = vec![0u8; remaining_count];
         let bytes_read = reader.read_bytes(&mut buffer)?;
-        if bytes_read != remaining_count {
-            Err(BinaryReaderError::UnexpectedEof)
-        } else {
+        if bytes_read == remaining_count {
             Ok(buffer)
+        } else {
+            Err(BinaryReaderError::UnexpectedEof)
         }
     }
 }

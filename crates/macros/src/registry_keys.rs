@@ -60,10 +60,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
                     }
                 })
                 .unwrap_or_else(|e| {
-                    panic!(
-                        "failed to parse registry attribute for {}: {}",
-                        variant_name, e
-                    )
+                    panic!("failed to parse registry attribute for {variant_name}: {e}")
                 });
             }
         }
@@ -80,10 +77,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             min_version_arms.push(quote! { #pat => None });
         } else {
             let id_str = id.unwrap_or_else(|| {
-                panic!(
-                    "variant {} missing id attribute in #[registry]",
-                    variant_name
-                )
+                panic!("variant {variant_name} missing id attribute in #[registry]")
             });
             id_arms.push(quote! { #pat => Identifier::vanilla_unchecked(#id_str) });
             is_mandatory_arms.push(quote! { #pat => #is_mandatory });

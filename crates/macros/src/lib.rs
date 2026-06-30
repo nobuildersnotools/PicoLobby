@@ -3,6 +3,7 @@ use proc_macro::TokenStream;
 mod packet_in;
 mod packet_out;
 mod packet_reports;
+mod pvn_attr;
 mod registry_keys;
 
 #[proc_macro_derive(PacketIn, attributes(pvn))]
