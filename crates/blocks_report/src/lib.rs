@@ -135,6 +135,44 @@ mod tests {
         );
     }
 
+    /// Blocks added after a client version must downgrade to the stand-in
+    /// ViaVersion picks for them. These all used to resolve to air because the
+    /// generator dropped the properties from Via's `name[` wildcard rewrites.
+    #[test]
+    fn newer_only_stairs_downgrade_instead_of_vanishing() {
+        const STAIRS: [&str; 8] = [
+            "minecraft:andesite_stairs",
+            "minecraft:polished_andesite_stairs",
+            "minecraft:granite_stairs",
+            "minecraft:polished_granite_stairs",
+            "minecraft:diorite_stairs",
+            "minecraft:mossy_cobblestone_stairs",
+            "minecraft:smooth_quartz_stairs",
+            "minecraft:end_stone_brick_stairs",
+        ];
+        for version in [
+            ProtocolVersion::V1_7_2,
+            ProtocolVersion::V1_8,
+            ProtocolVersion::V1_12_2,
+            ProtocolVersion::V1_13,
+            ProtocolVersion::V1_13_2,
+            ProtocolVersion::V1_16,
+        ] {
+            for block in STAIRS {
+                for state in [
+                    format!("{block}[facing=east,half=bottom,shape=straight,waterlogged=false]"),
+                    format!("{block}[facing=north,half=top,shape=inner_left,waterlogged=false]"),
+                ] {
+                    assert_ne!(
+                        native_id(&state, version),
+                        0,
+                        "{state} became air on {version:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn every_supported_version_has_a_mapping() {
         // The V1_16 cross-version pivot is gone: each version resolves directly.

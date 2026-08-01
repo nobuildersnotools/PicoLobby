@@ -77,7 +77,6 @@ pub struct EntityPositionSyncPacket {
     velocity_z: f64,
     yaw: f32,
     pitch: f32,
-    relative_flags: [u8; 4],
     on_ground: bool,
 }
 
@@ -101,7 +100,6 @@ impl EntityPositionSyncPacket {
             velocity_z: 0.0,
             yaw,
             pitch,
-            relative_flags: [0; 4],
             on_ground,
         }
     }
@@ -122,7 +120,6 @@ impl EncodePacket for EntityPositionSyncPacket {
         self.velocity_z.encode(writer, version)?;
         self.yaw.encode(writer, version)?;
         self.pitch.encode(writer, version)?;
-        writer.write_bytes(&self.relative_flags)?;
         self.on_ground.encode(writer, version)?;
         Ok(())
     }

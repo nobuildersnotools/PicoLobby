@@ -933,9 +933,13 @@ mod tests {
             .encode_packet(ProtocolVersion::V26_1)
             .unwrap();
         assert_eq!(raw_packet.packet_id(), Some(35));
-        assert_eq!(raw_packet.data().len(), 63);
+        assert_eq!(raw_packet.data().len(), 59);
         assert_eq!(&raw_packet.data()[0..2], &[0xac, 0x02]);
-        assert_eq!(&raw_packet.data()[58..63], &[0, 0, 0, 0, 1]);
+        // yaw 90.0, pitch 45.0, on_ground
+        assert_eq!(
+            &raw_packet.data()[50..59],
+            &[0x42, 0xb4, 0x00, 0x00, 0x42, 0x34, 0x00, 0x00, 1]
+        );
     }
 
     #[test]

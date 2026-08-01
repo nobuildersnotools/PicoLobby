@@ -147,11 +147,23 @@ function normalize(identifier: string): string {
     return `${name}[${props.join(",")}]`;
 }
 
-type NativeTable = Map<string, number>;
+interface NativeTable {
+    /** normalized `name[k1=v1,...]` -> native id. */
+    byState: Map<string, number>;
+    /** block name -> every state of that block, in ascending id order. */
+    byBase: Map<string, Array<[string, number]>>;
+}
+
+/** Split `name[k1=v1,k2=v2]` into its `k=v` pairs (empty for a bare name). */
+function propertyList(identifier: string): string[] {
+    const bracket = identifier.indexOf("[");
+    if (bracket === -1 || !identifier.endsWith("]")) return [];
+    return identifier.slice(bracket + 1, identifier.length - 1).split(",");
+}
 
 /** Build a `normalized identifier -> native id` table for one Via version. */
 function buildNativeTable(version: string, json: any): NativeTable {
-    const table: NativeTable = new Map();
+    const table = new Map<string, number>();
     if (PRE_FLATTENING.has(version)) {
         const blocks = json.blocks as Record<string, string>;
         if (!blocks) throw new Error(`mapping-${version}.json missing "blocks"`);
@@ -171,10 +183,30 @@ function buildNativeTable(version: string, json: any): NativeTable {
             if (!table.has(key)) table.set(key, index);
         });
     }
-    return table;
+
+    const byBase = new Map<string, Array<[string, number]>>();
+    for (const [ident, id] of table) {
+        const base = baseName(ident);
+        const states = byBase.get(base);
+        if (states) states.push([ident, id]);
+        else byBase.set(base, [[ident, id]]);
+    }
+    for (const states of byBase.values()) states.sort((a, b) => a[1] - b[1]);
+
+    return { byState: table, byBase };
 }
 
-type DiffMap = Map<string, string>;
+/**
+ * One rename across a version boundary. `wildcard` marks Via's `name[` form,
+ * whose trailing bracket means "replace the block name but keep the source's
+ * property list" (e.g. `andesite_stairs` -> `cobblestone_stairs[`).
+ */
+interface DiffEntry {
+    to: string;
+    wildcard: boolean;
+}
+
+type DiffMap = Map<string, DiffEntry>;
 
 /** Build a `normalized newer-ident -> normalized older-ident` rename map. */
 function buildDiffMap(json: any): DiffMap {
@@ -184,26 +216,64 @@ function buildDiffMap(json: any): DiffMap {
         if (!obj || Array.isArray(obj)) continue;
         for (const [from, to] of Object.entries(obj)) {
             if (typeof to !== "string") continue;
-            diff.set(normalize(from), normalize(to));
+            // `normalize` drops the trailing `[`, so record the wildcard first.
+            diff.set(normalize(from), { to: normalize(to), wildcard: to.endsWith("[") });
         }
     }
     return diff;
 }
 
-/** Rewrite an identifier across a version boundary: exact match, then base name. */
+/**
+ * Rewrite an identifier across a version boundary, mirroring ViaVersion's
+ * `MappingDataLoader.mapIdentifierEntry`: an exact blockstate entry wins, then a
+ * base-name entry. A wildcard entry re-attaches the source's property list, so
+ * `andesite_stairs[facing=east,...]` becomes `cobblestone_stairs[facing=east,...]`
+ * rather than a bare `cobblestone_stairs` that no flattened table contains.
+ */
 function rewrite(identifier: string, diff: DiffMap): string {
-    const exact = diff.get(identifier);
-    if (exact !== undefined) return exact;
-    const base = diff.get(baseName(identifier));
-    if (base !== undefined) return base;
-    return identifier;
+    const base = baseName(identifier);
+    const entry = diff.get(identifier) ?? diff.get(base);
+    if (entry === undefined) return identifier;
+    return entry.wildcard ? `${entry.to}${identifier.slice(base.length)}` : entry.to;
 }
 
-/** Look an identifier up in a native table, falling back to its base name. */
+/**
+ * Look an identifier up in a native table. Falls back to the closest state of the
+ * same block when the exact state is absent, which happens whenever a rename lands
+ * on a block with a different property set (`sculk_vein` -> `glow_lichen`) or a
+ * property was added in a later version (leaves gained `waterlogged` in 1.19.3).
+ * Without this the whole block became air.
+ *
+ * Candidates are ranked by shared `k=v` pairs, then by fewest properties the source
+ * does not constrain that are set to something other than `false`: Minecraft spells
+ * the inert value of a boolean state `false`, so this keeps an unconstrained
+ * `waterlogged` dry instead of drowning the block. Ties fall to the lowest id.
+ */
 function lookup(table: NativeTable, identifier: string): number | undefined {
-    const exact = table.get(identifier);
+    const exact = table.byState.get(identifier);
     if (exact !== undefined) return exact;
-    return table.get(baseName(identifier));
+
+    const candidates = table.byBase.get(baseName(identifier));
+    if (candidates === undefined) return undefined;
+
+    const wanted = new Set(propertyList(identifier));
+    const wantedKeys = new Set([...wanted].map((p) => p.slice(0, p.indexOf("="))));
+
+    let best: number | undefined;
+    let bestRank: [number, number] = [-1, Number.MAX_SAFE_INTEGER];
+    for (const [candidate, id] of candidates) {
+        const props = propertyList(candidate);
+        const matched = props.filter((p) => wanted.has(p)).length;
+        const loud = props.filter((p) => {
+            const eq = p.indexOf("=");
+            return !wantedKeys.has(p.slice(0, eq)) && p.slice(eq + 1) !== "false";
+        }).length;
+        if (matched > bestRank[0] || (matched === bestRank[0] && loud < bestRank[1])) {
+            bestRank = [matched, loud];
+            best = id;
+        }
+    }
+    return best;
 }
 
 // --- Pre-Flattening substitution (the minecraft-data layer) --------------------
@@ -294,7 +364,7 @@ async function main(): Promise<void> {
     //    blocks removed before the anchor are resolved at their native era.
     const seed = new Set<string>();
     for (const table of native.values()) {
-        for (const ident of table.keys()) seed.add(ident);
+        for (const ident of table.byState.keys()) seed.add(ident);
     }
     type Pair = { key: string; cur: string };
     const pairs: Pair[] = [...seed].map((ident) => ({ key: ident, cur: ident }));
@@ -310,7 +380,7 @@ async function main(): Promise<void> {
             // Prefer the identifier's own native id when it exists in this version
             // (it is the most precise, e.g. cauldron[level=1] on 1.16); otherwise
             // use the diff-rewritten identifier to downgrade a newer-only block.
-            const direct = table.get(p.key);
+            const direct = table.byState.get(p.key);
             const id = direct !== undefined ? direct : lookup(table, p.cur);
             if (id !== undefined) out.set(`${NS}${p.key}`, id);
         }
@@ -402,7 +472,7 @@ async function main(): Promise<void> {
     );
 
     // 7. Validation: a handful of known mappings must hold, or abort.
-    assertMappings(native, pairs);
+    assertMappings(native, resolved);
 
     const total = CHAIN.length + LEGACY_TARGETS.length;
     console.log(`Wrote ${total} version tables + versions.json to ${OUT_DIR}`);
@@ -412,11 +482,16 @@ async function main(): Promise<void> {
 }
 
 /**
- * Sanity-check known block ids against the freshly built native tables. These are
- * stable vanilla facts; a mismatch means the Via format or chain assumptions drifted.
+ * Sanity-check the freshly built tables. The native checks are stable vanilla
+ * facts; the downgrade checks pin the diff-chain behaviour that silently rots into
+ * air when Via's wildcard (`name[`) rewrites are mishandled. A mismatch means the
+ * Via format or chain assumptions drifted.
  */
-function assertMappings(native: Map<string, NativeTable>, _pairs: unknown): void {
-    const checks: Array<[string, string, number]> = [
+function assertMappings(
+    native: Map<string, NativeTable>,
+    resolved: Map<string, Map<string, number>>,
+): void {
+    const nativeChecks: Array<[string, string, number]> = [
         // pre-Flattening raw = id*16+meta
         ["1.12", "stone", 16],
         ["1.12", "granite", 17],
@@ -427,13 +502,43 @@ function assertMappings(native: Map<string, NativeTable>, _pairs: unknown): void
         ["1.16", "stone", 1],
         ["1.21", "stone", 1],
     ];
+
+    // A block introduced after the target version must resolve to the stand-in Via
+    // names for it, never to air. Value is the expected block name in that version.
+    const STRAIGHT = "facing=east,half=bottom,shape=straight,waterlogged=false";
+    const downgrades: Array<[string, string, string]> = [
+        // 1.14 stairs on a 1.13 client (the wildcard rewrites that used to hit air).
+        ["1.13.2", `andesite_stairs[${STRAIGHT}]`, "cobblestone_stairs"],
+        ["1.13.2", `polished_andesite_stairs[${STRAIGHT}]`, "stone_brick_stairs"],
+        ["1.13.2", `mossy_cobblestone_stairs[${STRAIGHT}]`, "cobblestone_stairs"],
+        // Newer stairs walking several boundaries down to a 1.16 client.
+        ["1.16.2", `cut_copper_stairs[${STRAIGHT}]`, "brick_stairs"],
+        ["1.16.2", `tuff_stairs[${STRAIGHT}]`, "andesite_stairs"],
+        // Non-stair wildcards: a rename that keeps its properties, and one that does not.
+        ["1.13.2", "spruce_sign[rotation=0,waterlogged=false]", "oak_sign"],
+        ["1.16.2", "mangrove_log[axis=y]", "acacia_log"],
+    ];
+
     const failures: string[] = [];
-    for (const [version, ident, expected] of checks) {
-        const got = native.get(version)?.get(normalize(ident));
+    for (const [version, ident, expected] of nativeChecks) {
+        const got = native.get(version)?.byState.get(normalize(ident));
         if (got !== expected) {
-            failures.push(`${version} ${ident}: expected ${expected}, got ${got}`);
+            failures.push(`native ${version} ${ident}: expected ${expected}, got ${got}`);
         }
     }
+    for (const [version, ident, expected] of downgrades) {
+        const id = resolved.get(version)?.get(`${NS}${normalize(ident)}`);
+        // Reverse the id back into a name so the check reads as a block, not a number.
+        const table = native.get(version);
+        const got =
+            id === undefined
+                ? undefined
+                : [...(table?.byState ?? [])].find(([, v]) => v === id)?.[0];
+        if (got === undefined || baseName(got) !== expected) {
+            failures.push(`downgrade ${version} ${ident}: expected ${expected}, got ${got}`);
+        }
+    }
+
     if (failures.length) {
         console.error("Validation FAILED:\n" + failures.join("\n"));
         process.exit(1);
