@@ -1,10 +1,11 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use pico_lobby_lib::bench_support::{
-    BenchProtocol, HotChunkCache, PROTOCOLS, VIEW_DISTANCES, chunk_cache_cold,
-    collect_chunk_packets, component_json, component_legacy, component_nbt,
+    BenchProtocol, HotChunkCache, LobbyMovementPlanFixture, PROTOCOLS, VIEW_DISTANCES,
+    chunk_cache_cold, collect_chunk_packets, component_json, component_legacy, component_nbt,
     decode_representative_packets, default_config_parse, drain_mixed_batch, drain_raw_cache_batch,
     encode_chunk_packets, encode_representative_packets, escape_minimessage, format_lobby_chat,
-    lobby_heavy_config_parse, nbt_from_slice, nbt_to_bytes, private_message_packets,
+    lobby_heavy_config_parse, movement_visibility_allocating, movement_visibility_inline,
+    nbt_from_slice, nbt_to_bytes, private_message_packets,
 };
 use std::hint::black_box;
 use tokio::runtime::Runtime;
@@ -70,6 +71,26 @@ fn bench_batch(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_lobby_plans(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lobby_plans");
+    for player_count in [8, 64, 256] {
+        let mut fixture = LobbyMovementPlanFixture::new(player_count);
+        group.bench_function(BenchmarkId::new("movement", player_count), |b| {
+            b.iter(|| black_box(fixture.next_plan()));
+        });
+    }
+    group.finish();
+}
+
+fn bench_lobby_visibility(c: &mut Criterion) {
+    c.bench_function("movement_packets_allocating", |b| {
+        b.iter(|| black_box(movement_visibility_allocating()));
+    });
+    c.bench_function("movement_packets_inline", |b| {
+        b.iter(|| black_box(movement_visibility_inline()));
+    });
+}
+
 fn bench_packet_codec(c: &mut Criterion) {
     let mut group = c.benchmark_group("packet_codec");
     for protocol in PROTOCOLS {
@@ -128,6 +149,8 @@ criterion_group!(
     bench_chunk_prep,
     bench_chunk_cache,
     bench_batch,
+    bench_lobby_plans,
+    bench_lobby_visibility,
     bench_packet_codec,
     bench_chat_text,
     bench_nbt_config

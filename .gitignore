@@ -3,6 +3,7 @@
 /docs/.vitepress/cache
 /docs/.vitepress/dist
 /target
+/pico_lobby/target
 node_modules/
 *.zst
 .DS_Store

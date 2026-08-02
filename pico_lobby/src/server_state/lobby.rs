@@ -407,16 +407,19 @@ impl LobbyState {
     }
 
     pub fn scoreboard_sessions(&self) -> Vec<ScoreboardSessionSnapshot> {
-        self.sessions_by_uuid
-            .values()
-            .map(|s| ScoreboardSessionSnapshot {
-                session_id: s.session_id,
-                uuid: s.uuid,
-                entity_id: s.entity_id,
-                username: s.username.to_string(),
-                protocol_version: s.protocol_version,
-            })
-            .collect()
+        let mut sessions = Vec::with_capacity(self.sessions_by_uuid.len());
+        sessions.extend(
+            self.sessions_by_uuid
+                .values()
+                .map(|s| ScoreboardSessionSnapshot {
+                    session_id: s.session_id,
+                    uuid: s.uuid,
+                    entity_id: s.entity_id,
+                    username: s.username.to_string(),
+                    protocol_version: s.protocol_version,
+                }),
+        );
+        sessions
     }
 
     pub fn plan_npc_spawn(&self) -> LobbyNpcSpawnPlan {
@@ -725,30 +728,37 @@ impl LobbyState {
         &self,
         exclude_session_id: Option<LobbySessionId>,
     ) -> Vec<LobbyRecipient> {
-        self.sessions_by_uuid
-            .values()
-            .filter(|session| Some(session.session_id) != exclude_session_id)
-            .filter(|session| session.players_visible)
-            .map(|session| LobbyRecipient {
-                session_id: session.session_id,
-                uuid: session.uuid,
-                entity_id: session.entity_id,
-                protocol_version: session.protocol_version,
-            })
-            .collect()
+        let mut recipients = Vec::with_capacity(self.sessions_by_uuid.len());
+        recipients.extend(
+            self.sessions_by_uuid
+                .values()
+                .filter(|session| {
+                    Some(session.session_id) != exclude_session_id && session.players_visible
+                })
+                .map(|session| LobbyRecipient {
+                    session_id: session.session_id,
+                    uuid: session.uuid,
+                    entity_id: session.entity_id,
+                    protocol_version: session.protocol_version,
+                }),
+        );
+        recipients
     }
 
     fn plan_chat_recipients(&self) -> Vec<LobbyRecipient> {
-        self.sessions_by_uuid
-            .values()
-            .filter(|session| session.chat_visibility.receives_normal_chat())
-            .map(|session| LobbyRecipient {
-                session_id: session.session_id,
-                uuid: session.uuid,
-                entity_id: session.entity_id,
-                protocol_version: session.protocol_version,
-            })
-            .collect()
+        let mut recipients = Vec::with_capacity(self.sessions_by_uuid.len());
+        recipients.extend(
+            self.sessions_by_uuid
+                .values()
+                .filter(|session| session.chat_visibility.receives_normal_chat())
+                .map(|session| LobbyRecipient {
+                    session_id: session.session_id,
+                    uuid: session.uuid,
+                    entity_id: session.entity_id,
+                    protocol_version: session.protocol_version,
+                }),
+        );
+        recipients
     }
 
     fn plan_private_message_to_session(
@@ -798,12 +808,14 @@ impl LobbyState {
         let uuid = self.session_to_uuid.get(&new_session_id)?;
         let new_session = LobbySpawnInfo::from_session(self.sessions_by_uuid.get(uuid)?);
 
-        let mut existing_sessions: Vec<(LobbySessionId, LobbySpawnInfo)> = self
-            .sessions_by_uuid
-            .values()
-            .filter(|s| s.session_id != new_session_id)
-            .map(|s| (s.session_id, LobbySpawnInfo::from_session(s)))
-            .collect();
+        let mut existing_sessions: Vec<(LobbySessionId, LobbySpawnInfo)> =
+            Vec::with_capacity(self.sessions_by_uuid.len().saturating_sub(1));
+        existing_sessions.extend(
+            self.sessions_by_uuid
+                .values()
+                .filter(|s| s.session_id != new_session_id)
+                .map(|s| (s.session_id, LobbySpawnInfo::from_session(s))),
+        );
         existing_sessions.sort_by_key(|(session_id, _)| *session_id);
         let existing_sessions = existing_sessions
             .into_iter()

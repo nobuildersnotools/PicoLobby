@@ -6,9 +6,11 @@ use crate::server::chunk_packet_cache::{ChunkPacketCache, ChunkPacketCacheKey};
 use crate::server::lobby_chat::{
     chat_component_for_plan, escape_minimessage_text, private_message_packets_for_plan,
 };
+use crate::server::lobby_visibility::movement_visibility_packets_inline;
 use crate::server::packet_registry::PacketRegistry;
 use crate::server_state::{
-    EntityId, LobbyChatPlan, LobbyPrivateMessagePlan, LobbyRecipient, LobbySessionId,
+    EntityId, LobbyChatPlan, LobbyPosition, LobbyPrivateMessagePlan, LobbyRecipient, LobbySession,
+    LobbySessionId, LobbyState,
 };
 use futures::StreamExt;
 use minecraft_packets::play::move_entity_packet::{MoveEntityPosPacket, RelativeMoveDelta};
@@ -132,6 +134,69 @@ pub fn chunk_cache_cold(protocol: BenchProtocol, view_distance: i32) -> usize {
 
 pub fn chunk_cache_hot(protocol: BenchProtocol, view_distance: i32) -> usize {
     HotChunkCache::new(protocol, view_distance).get()
+}
+
+pub struct LobbyMovementPlanFixture {
+    state: LobbyState,
+    entity_id: EntityId,
+    step: u32,
+}
+
+impl LobbyMovementPlanFixture {
+    pub fn new(player_count: usize) -> Self {
+        let mut state = LobbyState::new();
+        let mut entity_id = EntityId::new(0);
+        for index in 0..player_count {
+            let session = state.insert(LobbySession::new(
+                Uuid::from_u128((index as u128) + 1),
+                format!("Player{index}"),
+                None,
+                ProtocolVersion::V1_20_5,
+                LobbyPosition::new(index as f64, 64.0, 0.0, 0.0, 0.0),
+            ));
+            if index == 0 {
+                entity_id = session.entity_id;
+            }
+        }
+        Self {
+            state,
+            entity_id,
+            step: 0,
+        }
+    }
+
+    pub fn next_plan(&mut self) -> usize {
+        self.step = self.step.wrapping_add(1);
+        self.state
+            .update_position_with_movement_plan(
+                self.entity_id,
+                LobbyPosition::new(f64::from(self.step), 64.0, 0.0, 0.0, 0.0),
+            )
+            .map_or(0, |plan| plan.recipients.len())
+    }
+}
+
+pub fn movement_visibility_inline() -> usize {
+    movement_visibility_packets_inline(
+        ProtocolVersion::V1_20_5,
+        EntityId::new(300),
+        LobbyPosition::new(0.0, 64.0, 0.0, 0.0, 0.0),
+        LobbyPosition::new(0.25, 64.0, 0.0, 15.0, 0.0),
+    )
+    .into_iter()
+    .count()
+}
+
+pub fn movement_visibility_allocating() -> usize {
+    movement_visibility_packets_inline(
+        ProtocolVersion::V1_20_5,
+        EntityId::new(300),
+        LobbyPosition::new(0.0, 64.0, 0.0, 0.0, 0.0),
+        LobbyPosition::new(0.25, 64.0, 0.0, 15.0, 0.0),
+    )
+    .into_iter()
+    .collect::<Vec<_>>()
+    .len()
 }
 
 pub async fn drain_mixed_batch() -> usize {

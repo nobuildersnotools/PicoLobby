@@ -30,6 +30,57 @@ pub struct LobbyPacketBatch {
     pub packets: Vec<PacketRegistry>,
 }
 
+/// Visibility updates contain at most two packets. Keeping this small list
+/// inline avoids a heap allocation for each movement, metadata, or swing event.
+#[allow(clippy::large_enum_variant)]
+pub enum PacketList {
+    Empty,
+    One(PacketRegistry),
+    Two(PacketRegistry, PacketRegistry),
+}
+
+impl PacketList {
+    #[cfg(test)]
+    fn into_vec(self) -> Vec<PacketRegistry> {
+        self.into_iter().collect()
+    }
+}
+
+pub struct PacketListIter {
+    first: Option<PacketRegistry>,
+    second: Option<PacketRegistry>,
+}
+
+impl IntoIterator for PacketList {
+    type Item = PacketRegistry;
+    type IntoIter = PacketListIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            Self::Empty => PacketListIter {
+                first: None,
+                second: None,
+            },
+            Self::One(packet) => PacketListIter {
+                first: Some(packet),
+                second: None,
+            },
+            Self::Two(first, second) => PacketListIter {
+                first: Some(first),
+                second: Some(second),
+            },
+        }
+    }
+}
+
+impl Iterator for PacketListIter {
+    type Item = PacketRegistry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.first.take().or_else(|| self.second.take())
+    }
+}
+
 pub struct DelayedNpcTabListRemoveBatch {
     pub delay: Duration,
     pub packets: Vec<PacketRegistry>,
@@ -138,17 +189,33 @@ fn supports_movement_visibility(protocol_version: ProtocolVersion) -> bool {
     protocol_version.is_after_inclusive(ProtocolVersion::V1_7_2)
 }
 
+#[cfg(test)]
 pub fn movement_visibility_packets(
     recipient_version: ProtocolVersion,
     moving_entity_id: EntityId,
     previous_position: LobbyPosition,
     current_position: LobbyPosition,
 ) -> Vec<PacketRegistry> {
+    movement_visibility_packets_inline(
+        recipient_version,
+        moving_entity_id,
+        previous_position,
+        current_position,
+    )
+    .into_vec()
+}
+
+pub fn movement_visibility_packets_inline(
+    recipient_version: ProtocolVersion,
+    moving_entity_id: EntityId,
+    previous_position: LobbyPosition,
+    current_position: LobbyPosition,
+) -> PacketList {
     let position_changed = position_changed(previous_position, current_position);
     let rotation_changed = rotation_changed(previous_position, current_position);
 
     if !position_changed && !rotation_changed {
-        return Vec::new();
+        return PacketList::Empty;
     }
 
     let delta = if position_changed {
@@ -163,11 +230,11 @@ pub fn movement_visibility_packets(
         ) {
             Ok(delta) => Some(delta),
             Err(_) => {
-                return vec![teleport_visibility_packet(
+                return PacketList::One(teleport_visibility_packet(
                     recipient_version,
                     moving_entity_id,
                     current_position,
-                )];
+                ));
             }
         }
     } else {
@@ -175,44 +242,31 @@ pub fn movement_visibility_packets(
     };
 
     let entity_id = moving_entity_id.get();
-    let mut packets = Vec::new();
     match (delta, rotation_changed) {
-        (Some(delta), true) => {
-            packets.push(PacketRegistry::MoveEntityPosRot(
-                MoveEntityPosRotPacket::new(
-                    entity_id,
-                    delta,
-                    current_position.yaw,
-                    current_position.pitch,
-                    true,
-                ),
-            ));
-            packets.push(PacketRegistry::RotateHead(RotateHeadPacket::new(
+        (Some(delta), true) => PacketList::Two(
+            PacketRegistry::MoveEntityPosRot(MoveEntityPosRotPacket::new(
                 entity_id,
+                delta,
                 current_position.yaw,
-            )));
-        }
-        (Some(delta), false) => {
-            packets.push(PacketRegistry::MoveEntityPos(MoveEntityPosPacket::new(
-                entity_id, delta, true,
-            )));
-        }
-        (None, true) => {
-            packets.push(PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(
+                current_position.pitch,
+                true,
+            )),
+            PacketRegistry::RotateHead(RotateHeadPacket::new(entity_id, current_position.yaw)),
+        ),
+        (Some(delta), false) => PacketList::One(PacketRegistry::MoveEntityPos(
+            MoveEntityPosPacket::new(entity_id, delta, true),
+        )),
+        (None, true) => PacketList::Two(
+            PacketRegistry::MoveEntityRot(MoveEntityRotPacket::new(
                 entity_id,
                 current_position.yaw,
                 current_position.pitch,
                 true,
-            )));
-            packets.push(PacketRegistry::RotateHead(RotateHeadPacket::new(
-                entity_id,
-                current_position.yaw,
-            )));
-        }
-        (None, false) => {}
+            )),
+            PacketRegistry::RotateHead(RotateHeadPacket::new(entity_id, current_position.yaw)),
+        ),
+        (None, false) => PacketList::Empty,
     }
-
-    packets
 }
 
 #[cfg(test)]
@@ -238,11 +292,16 @@ pub fn metadata_visibility_batches(plan: &LobbyMetadataPlan) -> Vec<LobbyMetadat
         .collect()
 }
 
+#[cfg(test)]
 pub fn metadata_visibility_packets(plan: &LobbyMetadataPlan) -> Vec<PacketRegistry> {
-    vec![PacketRegistry::SetEntityMetadata(player_metadata_packet(
+    metadata_visibility_packets_inline(plan).into_vec()
+}
+
+pub fn metadata_visibility_packets_inline(plan: &LobbyMetadataPlan) -> PacketList {
+    PacketList::One(PacketRegistry::SetEntityMetadata(player_metadata_packet(
         plan.entity_id.get(),
         plan.crouching,
-    ))]
+    )))
 }
 
 #[cfg(test)]
@@ -261,10 +320,15 @@ pub fn swing_visibility_batches(plan: &LobbySwingPlan) -> Vec<LobbySwingPacketBa
         .collect()
 }
 
+#[cfg(test)]
 pub fn swing_visibility_packets(swinging_entity_id: EntityId) -> Vec<PacketRegistry> {
-    vec![PacketRegistry::Animate(AnimatePacket::main_hand(
+    swing_visibility_packets_inline(swinging_entity_id).into_vec()
+}
+
+pub fn swing_visibility_packets_inline(swinging_entity_id: EntityId) -> PacketList {
+    PacketList::One(PacketRegistry::Animate(AnimatePacket::main_hand(
         swinging_entity_id.get(),
-    ))]
+    )))
 }
 
 fn teleport_visibility_packet(

@@ -7,8 +7,9 @@ use crate::server::lobby_chat::{
 };
 use crate::server::lobby_visibility::{
     delayed_npc_tab_list_remove_batches_for_join, join_visibility_batches_for_existing,
-    join_visibility_packets_for_newcomer, leave_visibility_batches, metadata_visibility_packets,
-    movement_visibility_packets, npc_spawn_packets_for_join, swing_visibility_packets,
+    join_visibility_packets_for_newcomer, leave_visibility_batches,
+    metadata_visibility_packets_inline, movement_visibility_packets_inline,
+    npc_spawn_packets_for_join, swing_visibility_packets_inline,
 };
 use crate::server::packet_handler::{PacketHandler, PacketHandlerError};
 use crate::server::packet_registry::{
@@ -28,6 +29,7 @@ use net::packet_stream::PacketStreamError;
 use net::raw_packet::RawPacket;
 use std::collections::HashMap;
 use std::future::pending;
+use std::iter::once;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 use thiserror::Error;
@@ -455,7 +457,7 @@ async fn broadcast_movement(plan: &LobbyMovementPlan, server_state: &Arc<RwLock<
     drop(server_state_guard);
 
     queue_version_bucketed_packets(&buckets, "movement", |version| {
-        movement_visibility_packets(
+        movement_visibility_packets_inline(
             version,
             plan.moving_entity_id,
             plan.previous_position,
@@ -473,7 +475,9 @@ async fn broadcast_metadata(plan: &LobbyMetadataPlan, server_state: &Arc<RwLock<
     let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
-    queue_version_bucketed_packets(&buckets, "metadata", |_| metadata_visibility_packets(plan));
+    queue_version_bucketed_packets(&buckets, "metadata", |_| {
+        metadata_visibility_packets_inline(plan)
+    });
 }
 
 async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<ServerState>>) {
@@ -486,7 +490,7 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
     drop(server_state_guard);
 
     queue_version_bucketed_packets(&buckets, "swing", |_| {
-        swing_visibility_packets(plan.swinging_entity_id)
+        swing_visibility_packets_inline(plan.swinging_entity_id)
     });
 }
 
@@ -501,7 +505,7 @@ async fn broadcast_chat(plan: &LobbyChatPlan, server_state: &Arc<RwLock<ServerSt
 
     let component = chat_component_for_plan(plan);
     queue_version_bucketed_packets(&buckets, "chat", |version| {
-        vec![chat_packet_for_version(version, &component)]
+        once(chat_packet_for_version(version, &component))
     });
 }
 
@@ -553,16 +557,17 @@ fn broadcast_lifecycle_message_with_guard(
     let component = lifecycle_message_component_for_plan(plan);
 
     queue_version_bucketed_packets(&buckets, "lifecycle message", |version| {
-        vec![chat_packet_for_version(version, &component)]
+        once(chat_packet_for_version(version, &component))
     });
 }
 
-fn queue_version_bucketed_packets<F>(
+fn queue_version_bucketed_packets<F, I>(
     buckets: &HashMap<ProtocolVersion, Vec<mpsc::Sender<RawPacket>>>,
     context: &str,
     build_packets: F,
 ) where
-    F: Fn(ProtocolVersion) -> Vec<PacketRegistry>,
+    F: Fn(ProtocolVersion) -> I,
+    I: IntoIterator<Item = PacketRegistry>,
 {
     for (version, bucket_senders) in buckets {
         let version = *version;
