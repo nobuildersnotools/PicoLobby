@@ -65,14 +65,12 @@ impl World {
 
         let world_sections: Result<Vec<_>, _> = (0..chunk_count)
             .into_par_iter()
-            .map(|i| {
+            .map_init(ChunkProcessor::new, |processor, i| {
                 let chunk_x = i / (size_in_chunks.y() * size_in_chunks.z());
                 let chunk_y = (i / size_in_chunks.z()) % size_in_chunks.y();
                 let chunk_z = i % size_in_chunks.z();
 
                 let section_position = Coordinates::new(chunk_x, chunk_y, chunk_z);
-
-                let mut processor = ChunkProcessor::new();
                 processor.process_section(schematic, section_position)
             })
             .collect();

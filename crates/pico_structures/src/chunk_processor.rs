@@ -6,7 +6,10 @@ use minecraft_protocol::prelude::Coordinates;
 use std::mem;
 use thiserror::Error;
 
-const UNSEEN_ID_INDEX: u32 = u32::MAX;
+// Palette indices are capped at 256 entries, so a u16 is enough for both a
+// valid index and the sentinel. This halves the reusable lookup table without
+// changing the packed output type.
+const UNSEEN_ID_INDEX: u16 = u16::MAX;
 
 const LOOKUP_TABLE_SIZE: usize = InternalId::MAX as usize + 1;
 
@@ -15,7 +18,7 @@ const LOOKUP_TABLE_SIZE: usize = InternalId::MAX as usize + 1;
 /// The main block data is now handled on the stack.
 pub struct ChunkProcessor {
     palette: Vec<InternalId>,
-    id_to_palette_index: Vec<u32>,
+    id_to_palette_index: Vec<u16>,
 }
 
 #[derive(Debug, Error)]
@@ -78,7 +81,7 @@ impl ChunkProcessor {
                     let palette_index_slot = &mut self.id_to_palette_index[internal_id as usize];
 
                     if *palette_index_slot == UNSEEN_ID_INDEX {
-                        let new_index = self.palette.len() as u32;
+                        let new_index = self.palette.len() as u16;
                         self.palette.push(internal_id);
                         *palette_index_slot = new_index;
                     }
@@ -101,7 +104,7 @@ impl ChunkProcessor {
 
             let paletted_data = block_ids
                 .iter()
-                .map(|&id| self.id_to_palette_index[id as usize]);
+                .map(|&id| u32::from(self.id_to_palette_index[id as usize]));
             let packed_data = pack_direct(paletted_data, bits_per_entry);
 
             Ok(Palette::paletted(
