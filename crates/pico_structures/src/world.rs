@@ -6,11 +6,17 @@ use minecraft_protocol::prelude::Coordinates;
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 
 /// Light data for a single 16x16x16 chunk section.
 /// Each byte contains two 4-bit light values (high nibble and low nibble).
-pub type LightSection = Vec<i8>;
+/// Packed light values for one 16x16x16 section.
+///
+/// A section is immutable after the world is built, so an atomically shared
+/// slice stores the same bytes as a `Vec` without retaining capacity metadata;
+/// uniform sections can additionally share their backing allocation.
+pub type LightSection = Arc<[i8]>;
 
 pub struct World {
     world_sections: Vec<Palette>,
@@ -156,6 +162,11 @@ impl World {
             total_height,
         );
 
+        // The source transparency map is only needed during propagation. Drop
+        // it before materializing the long-lived per-section representation so
+        // startup peak memory does not include this extra full-volume byte.
+        drop(transparent);
+
         let sky_light_by_chunk = Self::convert_to_chunk_sections(
             &sky_light_volume,
             size_in_chunks,
@@ -165,6 +176,7 @@ impl World {
             total_height,
             15,
         );
+        drop(sky_light_volume);
         let block_light_by_chunk = Self::convert_to_chunk_sections(
             &block_light_volume,
             size_in_chunks,
@@ -354,7 +366,15 @@ impl World {
                         }
                     }
 
-                    sections.push(light_data);
+                    // Empty block-light sections and fully-lit sky sections are
+                    // common in a static lobby. Share those immutable arrays
+                    // instead of retaining one 2 KiB allocation per section.
+                    let uniform_byte = (default_light | (default_light << 4)) as i8;
+                    if light_data.iter().all(|&byte| byte == uniform_byte) {
+                        sections.push(shared_light_section(default_light));
+                    } else {
+                        sections.push(Arc::from(light_data.into_boxed_slice()));
+                    }
                 }
 
                 sections
@@ -436,5 +456,33 @@ impl World {
     /// Get the number of Y sections in the world
     pub fn get_section_count_y(&self) -> i32 {
         self.size_in_chunks.y()
+    }
+}
+
+fn shared_light_section(default_light: u8) -> LightSection {
+    static EMPTY: OnceLock<Arc<[i8]>> = OnceLock::new();
+    static FULL: OnceLock<Arc<[i8]>> = OnceLock::new();
+
+    match default_light {
+        0 => Arc::clone(EMPTY.get_or_init(|| vec![0i8; 2048].into_boxed_slice().into())),
+        15 => Arc::clone(FULL.get_or_init(|| vec![-1i8; 2048].into_boxed_slice().into())),
+        _ => Arc::from(vec![(default_light | (default_light << 4)) as i8; 2048]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uniform_light_sections_share_backing_storage() {
+        let empty_a = shared_light_section(0);
+        let empty_b = shared_light_section(0);
+        let full = shared_light_section(15);
+
+        assert!(Arc::ptr_eq(&empty_a, &empty_b));
+        assert_ne!(empty_a.as_ptr(), full.as_ptr());
+        assert_eq!(empty_a.len(), 2048);
+        assert_eq!(full.len(), 2048);
     }
 }

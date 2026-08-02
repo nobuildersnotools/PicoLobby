@@ -144,24 +144,27 @@ impl ClientState {
         }
     }
 
+    #[allow(dead_code)]
     pub fn game_profile(&self) -> Option<GameProfile> {
         self.game_profile.clone()
     }
 
     pub fn get_username(&self) -> String {
-        self.game_profile().map_or_else(
+        self.game_profile.as_ref().map_or_else(
             || Self::ANONYMOUS.to_owned(),
             |profile| profile.username().to_owned(),
         )
     }
 
     pub fn get_unique_id(&self) -> Uuid {
-        self.game_profile()
+        self.game_profile
+            .as_ref()
             .map_or_else(Uuid::default, |profile| profile.uuid())
     }
 
     pub fn get_textures(&self) -> Option<Property> {
-        self.game_profile()
+        self.game_profile
+            .as_ref()
             .and_then(|profile| profile.textures().cloned())
     }
 

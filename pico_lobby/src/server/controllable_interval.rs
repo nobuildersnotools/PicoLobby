@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::{Duration, Instant, Interval, MissedTickBehavior};
 
@@ -9,20 +8,18 @@ struct IntervalState {
 /// A controllable interval that can be enabled, disabled, and have its
 /// duration changed on the fly.
 ///
-/// It is designed to be cloneable and safe to share across multiple
-/// asynchronous tasks.
-#[derive(Clone)]
+/// It is safe to use from the connection task's asynchronous wait points.
 pub struct ControllableInterval {
-    state: Arc<Mutex<IntervalState>>,
-    notify: Arc<Notify>,
+    state: Mutex<IntervalState>,
+    notify: Notify,
 }
 
 impl ControllableInterval {
     /// Creates a new `ControllableInterval`, initially disabled.
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(IntervalState { interval: None })),
-            notify: Arc::new(Notify::new()),
+            state: Mutex::new(IntervalState { interval: None }),
+            notify: Notify::new(),
         }
     }
 

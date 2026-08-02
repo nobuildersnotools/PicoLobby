@@ -20,9 +20,9 @@ pub struct Light {
 }
 
 impl Light {
-    pub fn new(data: Vec<i8>) -> Self {
+    pub fn new(data: &[i8]) -> Self {
         Self {
-            block_light_array: data.into_iter().map(|byte| byte as u8).collect(),
+            block_light_array: data.iter().map(|byte| *byte as u8).collect(),
         }
     }
 
@@ -53,7 +53,7 @@ impl Light {
     ) -> Vec<Light> {
         let mut arrays = Vec::with_capacity(total_light_sections);
         arrays.push(edge());
-        arrays.extend(sections.iter().map(|section| Light::new(section.clone())));
+        arrays.extend(sections.iter().map(|section| Light::new(section)));
         arrays.push(edge());
         while arrays.len() < total_light_sections {
             arrays.push(edge());

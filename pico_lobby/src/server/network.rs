@@ -40,7 +40,10 @@ use tokio::time::{Duration, Instant, Interval};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-const LOBBY_BROADCAST_QUEUE_CAPACITY: usize = 256;
+// Broadcasts are best-effort and are dropped when a client cannot keep up.
+// Keep enough room for a normal burst while bounding the number of queued raw
+// packets retained for a client that cannot keep up.
+const LOBBY_BROADCAST_QUEUE_CAPACITY: usize = 64;
 
 /// Coarse ceiling on simultaneously handled connections. This is a safety net
 /// against connection-count floods (only reachable if the backend port is not

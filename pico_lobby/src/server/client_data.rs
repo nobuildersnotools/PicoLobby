@@ -4,7 +4,6 @@ use minecraft_protocol::prelude::ProtocolVersion;
 use net::packet_stream::{PacketStream, PacketStreamError};
 use net::raw_packet::RawPacket;
 use std::ops::Add;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -21,9 +20,9 @@ use tokio::time::Instant;
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ClientData {
-    client_state: Arc<Mutex<ClientState>>,
-    packet_stream: Arc<Mutex<PacketStream<TcpStream>>>,
-    interval: Arc<Mutex<ControllableInterval>>,
+    client_state: Mutex<ClientState>,
+    packet_stream: Mutex<PacketStream<TcpStream>>,
+    interval: Mutex<ControllableInterval>,
 }
 
 impl ClientData {
@@ -33,9 +32,9 @@ impl ClientData {
         let interval = ControllableInterval::new();
 
         Self {
-            client_state: Arc::new(Mutex::new(client_state)),
-            packet_stream: Arc::new(Mutex::new(packet_stream)),
-            interval: Arc::new(Mutex::new(interval)),
+            client_state: Mutex::new(client_state),
+            packet_stream: Mutex::new(packet_stream),
+            interval: Mutex::new(interval),
         }
     }
 
