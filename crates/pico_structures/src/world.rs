@@ -32,10 +32,33 @@ pub struct World {
 pub enum WorldLoadingError {
     #[error(transparent)]
     ChunkProcessor(#[from] ChunkProcessorError),
+    #[error("failed to create world loading thread pool: {0}")]
+    ThreadPool(#[from] rayon::ThreadPoolBuildError),
 }
 
 impl World {
     pub fn from_schematic(schematic: &Schematic) -> Result<Self, WorldLoadingError> {
+        let dimensions = schematic.get_dimensions();
+        let size_in_chunks = (dimensions + 15) / 16;
+        let chunk_count = size_in_chunks.x() * size_in_chunks.y() * size_in_chunks.z();
+        let available_threads = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let world_threads = usize::try_from(chunk_count)
+            .ok()
+            .filter(|&count| count > 0)
+            .unwrap_or(1)
+            .min(available_threads);
+
+        // World construction is parallel, but it should not permanently
+        // initialize Rayon’s global pool. The global pool's worker stacks stay
+        // alive for the entire server process even though world loading is a
+        // one-time operation.
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(world_threads)
+            .build()?
+            .install(|| Self::from_schematic_inner(schematic))
+    }
+
+    fn from_schematic_inner(schematic: &Schematic) -> Result<Self, WorldLoadingError> {
         let dimensions = schematic.get_dimensions();
         let size_in_chunks = (dimensions + 15) / 16;
         let chunk_count = size_in_chunks.x() * size_in_chunks.y() * size_in_chunks.z();
