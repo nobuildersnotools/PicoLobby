@@ -160,7 +160,7 @@ impl ClientState {
     pub fn get_unique_id(&self) -> Uuid {
         self.game_profile
             .as_ref()
-            .map_or_else(Uuid::default, |profile| profile.uuid())
+            .map_or_else(Uuid::default, GameProfile::uuid)
     }
 
     pub fn get_textures(&self) -> Option<Property> {
