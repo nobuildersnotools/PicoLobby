@@ -44,6 +44,14 @@ impl ChunkProcessor {
         self.palette.clear();
     }
 
+    fn take_palette(&mut self) -> Vec<InternalId> {
+        let palette = mem::take(&mut self.palette);
+        for &id in &palette {
+            self.id_to_palette_index[id as usize] = UNSEEN_ID_INDEX;
+        }
+        palette
+    }
+
     pub fn process_section(
         &mut self,
         schematic: &Schematic,
@@ -109,7 +117,7 @@ impl ChunkProcessor {
 
             Ok(Palette::paletted(
                 bits_per_entry,
-                mem::take(&mut self.palette),
+                self.take_palette(),
                 packed_data,
             ))
         } else {
@@ -121,4 +129,39 @@ impl ChunkProcessor {
 /// Calculates the minimum number of bits required to represent `n` distinct states.
 fn bits_needed(n: u32) -> u32 {
     if n <= 1 { 1 } else { (n - 1).ilog2() + 1 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::prelude::Schematic;
+
+    #[test]
+    fn reusing_processor_rebuilds_palette_after_paletted_section() {
+        let dimensions = Coordinates::new(16, 32, 16);
+        let mut block_data = vec![0; (16 * 32 * 16) as usize];
+        block_data[1] = 1;
+        block_data[16 * 16 * 16 + 1] = 1;
+        let schematic = Schematic::from_test_data(dimensions, vec![0, 1], block_data);
+        let mut processor = ChunkProcessor::new();
+
+        let first = processor
+            .process_section(&schematic, Coordinates::new(0, 0, 0))
+            .expect("first section should be processable");
+        let second = processor
+            .process_section(&schematic, Coordinates::new(0, 1, 0))
+            .expect("second section should be processable");
+
+        for palette in [first, second] {
+            let Palette::Paletted {
+                internal_palette,
+                packed_data: _,
+                bits_per_entry: _,
+            } = palette
+            else {
+                panic!("expected a paletted section");
+            };
+            assert_eq!(internal_palette, vec![0, 1]);
+        }
+    }
 }

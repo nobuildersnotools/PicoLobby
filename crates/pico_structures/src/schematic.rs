@@ -36,6 +36,24 @@ pub struct Schematic {
 }
 
 impl Schematic {
+    #[cfg(test)]
+    pub(crate) fn from_test_data(
+        dimensions: Coordinates,
+        palette: Vec<blocks_report::InternalId>,
+        block_data: Vec<i32>,
+    ) -> Self {
+        Self {
+            palette: palette
+                .into_iter()
+                .map(|internal_id| StateData::new(internal_id, true, 0))
+                .collect(),
+            block_data,
+            dimensions,
+            air_palette_index: 0,
+            block_entities: Vec::new(),
+        }
+    }
+
     /// Loads a `.schem` file from the given path for a specific Minecraft protocol version.
     pub fn load_schematic_file(
         path: &Path,
