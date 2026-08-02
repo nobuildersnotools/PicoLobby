@@ -5,6 +5,7 @@ use crate::server_state::{
 };
 use minecraft_packets::login::Property;
 use minecraft_protocol::prelude::{ProtocolVersion, State, Uuid};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::info;
 
@@ -166,6 +167,12 @@ impl ClientState {
         self.game_profile
             .as_ref()
             .and_then(|profile| profile.textures().cloned())
+    }
+
+    pub fn get_textures_shared(&self) -> Option<Arc<Property>> {
+        self.game_profile
+            .as_ref()
+            .and_then(GameProfile::textures_arc)
     }
 
     // Entity

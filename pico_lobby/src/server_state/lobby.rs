@@ -93,8 +93,8 @@ impl ChatVisibility {
 pub struct LobbySession {
     pub session_id: LobbySessionId,
     pub uuid: Uuid,
-    pub username: String,
-    pub textures: Option<Property>,
+    pub username: Box<str>,
+    pub textures: Option<Arc<Property>>,
     pub protocol_version: ProtocolVersion,
     pub entity_id: EntityId,
     pub position: LobbyPosition,
@@ -109,14 +109,14 @@ impl LobbySession {
     pub fn new(
         uuid: Uuid,
         username: impl Into<String>,
-        textures: Option<Property>,
+        textures: Option<Arc<Property>>,
         protocol_version: ProtocolVersion,
         position: LobbyPosition,
     ) -> Self {
         Self {
             session_id: LobbySessionId::new(0),
             uuid,
-            username: username.into(),
+            username: username.into().into_boxed_str(),
             textures,
             protocol_version,
             entity_id: EntityId::new(0),
@@ -290,8 +290,8 @@ impl LobbySpawnInfo {
     fn from_session(session: &LobbySession) -> Self {
         Self {
             uuid: session.uuid,
-            username: session.username.clone(),
-            textures: session.textures.clone(),
+            username: session.username.to_string(),
+            textures: session.textures.as_deref().cloned(),
             entity_id: session.entity_id,
             position: session.position,
             crouching: session.crouching,
@@ -342,9 +342,9 @@ pub struct LobbyState {
     npcs: Arc<[LobbyNpc]>,
     npc_entity_to_index: HashMap<EntityId, usize>,
     sessions_by_uuid: HashMap<Uuid, LobbySession>,
-    entity_to_uuid: HashMap<EntityId, Uuid>,
+    entity_to_session: HashMap<EntityId, LobbySessionId>,
     session_to_uuid: HashMap<LobbySessionId, Uuid>,
-    reply_peers: HashMap<LobbySessionId, Uuid>,
+    reply_peers: HashMap<LobbySessionId, LobbySessionId>,
 }
 
 impl LobbyState {
@@ -359,7 +359,7 @@ impl LobbyState {
             npcs: Arc::from(Vec::<LobbyNpc>::new()),
             npc_entity_to_index: HashMap::new(),
             sessions_by_uuid: HashMap::new(),
-            entity_to_uuid: HashMap::new(),
+            entity_to_session: HashMap::new(),
             session_to_uuid: HashMap::new(),
             reply_peers: HashMap::new(),
         };
@@ -413,7 +413,7 @@ impl LobbyState {
                 session_id: s.session_id,
                 uuid: s.uuid,
                 entity_id: s.entity_id,
-                username: s.username.clone(),
+                username: s.username.to_string(),
                 protocol_version: s.protocol_version,
             })
             .collect()
@@ -446,7 +446,7 @@ impl LobbyState {
 
     pub fn insert(&mut self, mut session: LobbySession) -> LobbySession {
         if let Some(previous) = self.sessions_by_uuid.remove(&session.uuid) {
-            self.entity_to_uuid.remove(&previous.entity_id);
+            self.entity_to_session.remove(&previous.entity_id);
             self.session_to_uuid.remove(&previous.session_id);
             self.reply_peers.remove(&previous.session_id);
         }
@@ -455,7 +455,8 @@ impl LobbyState {
         session.entity_id = self.allocate_entity_id();
         self.session_to_uuid
             .insert(session.session_id, session.uuid);
-        self.entity_to_uuid.insert(session.entity_id, session.uuid);
+        self.entity_to_session
+            .insert(session.entity_id, session.session_id);
         let uuid = session.uuid;
         self.sessions_by_uuid.insert(uuid, session);
         self.sessions_by_uuid
@@ -467,7 +468,7 @@ impl LobbyState {
     #[allow(dead_code)]
     pub fn remove_by_uuid(&mut self, uuid: Uuid) -> Option<LobbySession> {
         let session = self.sessions_by_uuid.remove(&uuid)?;
-        self.entity_to_uuid.remove(&session.entity_id);
+        self.entity_to_session.remove(&session.entity_id);
         self.session_to_uuid.remove(&session.session_id);
         self.reply_peers.remove(&session.session_id);
         Some(session)
@@ -476,7 +477,7 @@ impl LobbyState {
     pub fn remove_by_session_id(&mut self, session_id: LobbySessionId) -> Option<LobbySession> {
         let uuid = self.session_to_uuid.remove(&session_id)?;
         let session = self.sessions_by_uuid.remove(&uuid)?;
-        self.entity_to_uuid.remove(&session.entity_id);
+        self.entity_to_session.remove(&session.entity_id);
         self.reply_peers.remove(&session_id);
         Some(session)
     }
@@ -490,7 +491,7 @@ impl LobbyState {
         let lifecycle_message_recipients = self.plan_chat_recipients();
         Some(LobbyLeavePlan {
             departed_uuid: removed.uuid,
-            departed_username: removed.username,
+            departed_username: removed.username.into_string(),
             departed_entity_id: removed.entity_id,
             recipients,
             lifecycle_message_recipients,
@@ -499,11 +500,8 @@ impl LobbyState {
 
     #[allow(dead_code)]
     pub fn remove_by_entity_id(&mut self, entity_id: EntityId) -> Option<LobbySession> {
-        let uuid = self.entity_to_uuid.remove(&entity_id)?;
-        let session = self.sessions_by_uuid.remove(&uuid)?;
-        self.session_to_uuid.remove(&session.session_id);
-        self.reply_peers.remove(&session.session_id);
-        Some(session)
+        let session_id = self.entity_to_session.get(&entity_id).copied()?;
+        self.remove_by_session_id(session_id)
     }
 
     #[allow(dead_code)]
@@ -513,8 +511,8 @@ impl LobbyState {
 
     #[allow(dead_code)]
     pub fn session_by_entity_id(&self, entity_id: EntityId) -> Option<&LobbySession> {
-        let uuid = self.entity_to_uuid.get(&entity_id)?;
-        self.sessions_by_uuid.get(uuid)
+        let session_id = self.entity_to_session.get(&entity_id)?;
+        self.session_by_session_id(*session_id)
     }
 
     #[allow(dead_code)]
@@ -528,7 +526,8 @@ impl LobbyState {
         entity_id: EntityId,
         position: LobbyPosition,
     ) -> Option<LobbyMovementPlan> {
-        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let session_id = *self.entity_to_session.get(&entity_id)?;
+        let uuid = self.session_to_uuid.get(&session_id)?;
         let (moving_session_id, previous_position) = {
             let session = self.sessions_by_uuid.get_mut(uuid)?;
             let previous_position = session.position;
@@ -551,7 +550,8 @@ impl LobbyState {
         entity_id: EntityId,
         crouching: bool,
     ) -> Option<LobbyMetadataPlan> {
-        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let session_id = *self.entity_to_session.get(&entity_id)?;
+        let uuid = self.session_to_uuid.get(&session_id)?;
         let session_id = {
             let session = self.sessions_by_uuid.get_mut(uuid)?;
             if session.crouching == crouching {
@@ -571,7 +571,8 @@ impl LobbyState {
     }
 
     pub fn plan_swing_broadcast(&self, entity_id: EntityId) -> Option<LobbySwingPlan> {
-        let uuid = self.entity_to_uuid.get(&entity_id)?;
+        let session_id = *self.entity_to_session.get(&entity_id)?;
+        let uuid = self.session_to_uuid.get(&session_id)?;
         let session = self.sessions_by_uuid.get(uuid)?;
         let recipients = self.plan_recipients(Some(session.session_id));
         Some(LobbySwingPlan {
@@ -622,7 +623,7 @@ impl LobbyState {
 
         Some(LobbyChatPlan {
             sender_session_id,
-            sender_username: sender.username.clone(),
+            sender_username: sender.username.to_string(),
             message: message.into(),
             format: String::new(),
             recipients,
@@ -658,12 +659,12 @@ impl LobbyState {
         let sender = self
             .session_by_session_id(sender_session_id)
             .ok_or(LobbyPrivateMessageError::Unavailable)?;
-        let peer_uuid = *self
+        let peer_session_id = *self
             .reply_peers
             .get(&sender_session_id)
             .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
         let recipient = self
-            .session_by_uuid(peer_uuid)
+            .session_by_session_id(peer_session_id)
             .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
         validate_private_message_pair(sender, recipient)
     }
@@ -679,12 +680,12 @@ impl LobbyState {
             .session_by_session_id(sender_session_id)
             .ok_or(LobbyPrivateMessageError::Unavailable)?
             .clone();
-        let peer_uuid = *self
+        let peer_session_id = *self
             .reply_peers
             .get(&sender_session_id)
             .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?;
         let recipient = self
-            .session_by_uuid(peer_uuid)
+            .session_by_session_id(peer_session_id)
             .ok_or(LobbyPrivateMessageError::MissingReplyTarget)?
             .clone();
         self.plan_private_message_to_session(
@@ -704,7 +705,7 @@ impl LobbyState {
         let uuid = self.session_to_uuid.get(&session_id)?;
         let session = self.sessions_by_uuid.get(uuid)?;
         Some(LobbyLifecycleMessagePlan {
-            player_username: session.username.clone(),
+            player_username: session.username.to_string(),
             template: template.into(),
             recipients: self.plan_chat_recipients(),
         })
@@ -760,14 +761,16 @@ impl LobbyState {
     ) -> Result<LobbyPrivateMessagePlan, LobbyPrivateMessageError> {
         validate_private_message_pair(sender, recipient)?;
 
-        self.reply_peers.insert(sender.session_id, recipient.uuid);
-        self.reply_peers.insert(recipient.session_id, sender.uuid);
+        self.reply_peers
+            .insert(sender.session_id, recipient.session_id);
+        self.reply_peers
+            .insert(recipient.session_id, sender.session_id);
 
         Ok(LobbyPrivateMessagePlan {
             sender_session_id: sender.session_id,
             recipient_session_id: recipient.session_id,
-            sender_username: sender.username.clone(),
-            recipient_username: recipient.username.clone(),
+            sender_username: sender.username.to_string(),
+            recipient_username: recipient.username.to_string(),
             message: message.into(),
             sender_format: sender_format.into(),
             recipient_format: recipient_format.into(),
@@ -1047,7 +1050,8 @@ mod tests {
             state
                 .session_by_entity_id(second.entity_id)
                 .unwrap()
-                .username,
+                .username
+                .as_ref(),
             "second"
         );
         assert_eq!(state.len(), 1);
@@ -1066,7 +1070,8 @@ mod tests {
             state
                 .session_by_session_id(second.session_id)
                 .unwrap()
-                .username,
+                .username
+                .as_ref(),
             "second"
         );
     }

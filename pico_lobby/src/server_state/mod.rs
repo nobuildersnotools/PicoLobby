@@ -572,7 +572,7 @@ impl ServerState {
         let session = LobbySession::new(
             client_state.get_unique_id(),
             client_state.get_username(),
-            client_state.get_textures(),
+            client_state.get_textures_shared(),
             client_state.protocol_version(),
             LobbyPosition::new(x, y, z, yaw, pitch),
         );

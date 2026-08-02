@@ -2,13 +2,14 @@ use md5::{Digest, Md5};
 use minecraft_packets::login::Property;
 use minecraft_packets::login::login_state_packet::LoginStartPacket;
 use minecraft_protocol::prelude::*;
+use std::sync::Arc;
 use uuid::Builder as UuidBuilder;
 
 #[derive(Clone)]
 pub struct GameProfile {
     username: String,
     uuid: Uuid,
-    textures: Option<Property>,
+    textures: Option<Arc<Property>>,
 }
 
 impl GameProfile {
@@ -16,15 +17,15 @@ impl GameProfile {
         Self {
             username: sanitize_username(username),
             uuid,
-            textures,
+            textures: textures.map(Arc::new),
         }
     }
 
-    pub const fn anonymous(uuid: Uuid, textures: Option<Property>) -> Self {
+    pub fn anonymous(uuid: Uuid, textures: Option<Property>) -> Self {
         Self {
             username: String::new(),
             uuid,
-            textures,
+            textures: textures.map(Arc::new),
         }
     }
 
@@ -47,8 +48,12 @@ impl GameProfile {
         self.uuid
     }
 
-    pub const fn textures(&self) -> Option<&Property> {
-        self.textures.as_ref()
+    pub fn textures(&self) -> Option<&Property> {
+        self.textures.as_deref()
+    }
+
+    pub fn textures_arc(&self) -> Option<Arc<Property>> {
+        self.textures.clone()
     }
 }
 
