@@ -671,6 +671,7 @@ async fn scoreboard_broadcast_task(server_state: Arc<RwLock<ServerState>>) {
 
     let mut last_renders: std::collections::HashMap<LobbySessionId, RenderedScoreboard> =
         std::collections::HashMap::new();
+    let mut last_population: Option<(u32, u32)> = None;
 
     loop {
         interval.tick().await;
@@ -681,10 +682,24 @@ async fn scoreboard_broadcast_task(server_state: Arc<RwLock<ServerState>>) {
         let sessions = guard.lobby_scoreboard_sessions();
         if sessions.is_empty() {
             last_renders.clear();
+            last_population = None;
             continue;
         }
         let online = guard.online_players();
         let max_players = guard.max_players();
+
+        // Scoreboard inputs are static between joins/leaves: usernames and
+        // protocol versions do not change during a session, while the online
+        // count changes only when the session set changes. Avoid reparsing all
+        // MiniMessage lines and re-encoding unchanged packets on idle ticks.
+        let population_unchanged = last_population == Some((online, max_players))
+            && last_renders.len() == sessions.len()
+            && sessions
+                .iter()
+                .all(|session| last_renders.contains_key(&session.session_id));
+        if population_unchanged {
+            continue;
+        }
 
         let recipients: Vec<_> = sessions
             .iter()
@@ -737,6 +752,7 @@ async fn scoreboard_broadcast_task(server_state: Arc<RwLock<ServerState>>) {
         }
         drop(guard);
         last_renders = next_renders;
+        last_population = Some((online, max_players));
     }
 }
 
