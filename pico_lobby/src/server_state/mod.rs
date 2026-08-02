@@ -351,14 +351,23 @@ impl ServerState {
 
     /// Returns the current number of connected clients.
     pub fn online_players(&self) -> u32 {
-        if !self.show_online_player_count {
-            return 0;
-        }
-
         if self.lobby_enabled {
             u32::try_from(self.lobby_state().len()).unwrap_or(u32::MAX)
         } else {
             self.connected_clients.load(Ordering::Relaxed)
+        }
+    }
+
+    /// Returns the player count advertised in a server-list status response.
+    ///
+    /// Runtime templates deliberately use [`Self::online_players`] directly, so
+    /// disabling the public server-list count does not make `{online}` render as
+    /// zero in the lobby UI.
+    pub fn server_list_online_players(&self) -> u32 {
+        if self.show_online_player_count {
+            self.online_players()
+        } else {
+            0
         }
     }
 
@@ -1817,6 +1826,25 @@ mod tests {
                 .unwrap()
             ),
             "Back to spawn, Alex"
+        );
+    }
+
+    #[test]
+    fn online_placeholder_uses_real_count_when_server_list_count_is_hidden() {
+        let mut builder = ServerState::builder();
+        builder
+            .set_lobby_enabled(true)
+            .show_online_player_count(false);
+        let server_state = builder.build().unwrap();
+        let mut client = ClientState::default();
+
+        server_state.register_lobby_session(&mut client).unwrap();
+
+        assert_eq!(server_state.online_players(), 1);
+        assert_eq!(server_state.server_list_online_players(), 0);
+        assert_eq!(
+            render_config_template("{online}", &server_state.config_placeholders("Alex")),
+            "1"
         );
     }
 

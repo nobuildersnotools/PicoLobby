@@ -36,7 +36,7 @@ impl PacketHandler for StatusRequestPacket {
             version_string,
             version_number,
             &motd,
-            server_state.online_players(),
+            server_state.server_list_online_players(),
             server_state.max_players(),
             server_state.fav_icon(),
         );
