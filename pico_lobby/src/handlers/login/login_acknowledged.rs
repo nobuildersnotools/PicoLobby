@@ -385,6 +385,23 @@ mod tests {
     }
 
     #[test]
+    fn v26_2_registry_data_excludes_hardcoded_block_registry() {
+        let registry_provider = PrecomputedRegistries::new(ProtocolVersion::V26_2);
+        let registries = registry_provider.get_registry_data_v1_20_5().unwrap();
+
+        assert!(
+            registries
+                .iter()
+                .all(|(registry_id, _)| { registry_id.to_string() != "minecraft:block" })
+        );
+        assert!(
+            registries
+                .iter()
+                .any(|(registry_id, _)| { registry_id.to_string() == "minecraft:dimension_type" })
+        );
+    }
+
+    #[test]
     fn known_pack_response_uses_picolobby_registry_payloads() {
         for protocol_version in [
             ProtocolVersion::V1_21,

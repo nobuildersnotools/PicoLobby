@@ -76,11 +76,63 @@ pub fn registry_entry_value_for_protocol(
 ) -> Value {
     let mut value = raw_value.clone();
 
-    if registry_id.namespace == "minecraft" && registry_id.thing == "trim_material" {
-        normalize_trim_material(protocol_version, &entry_id.thing, &mut value);
+    if registry_id.namespace == "minecraft" {
+        match registry_id.thing.as_str() {
+            "dimension_type" => normalize_dimension_type(&mut value),
+            "trim_material" => {
+                normalize_trim_material(protocol_version, &entry_id.thing, &mut value);
+            }
+            _ => {}
+        }
     }
 
     value
+}
+
+fn normalize_dimension_type(value: &mut Value) {
+    let Value::Compound(fields) = value else {
+        return;
+    };
+
+    // Mojang's JSON reports do not retain NBT numeric types. The generic JSON
+    // converter consequently stores small integral values as TAG_Byte/TAG_Short,
+    // but dimension codecs require these fields to be TAG_Int. Consumers such as
+    // Geyser use NbtMap#getInt and otherwise see a zero-height dimension.
+    for field in [
+        "height",
+        "logical_height",
+        "min_y",
+        "monster_spawn_block_light_limit",
+    ] {
+        normalize_i32_field(fields, field);
+    }
+
+    if let Some(Value::Compound(light_level)) = fields.get_mut("monster_spawn_light_level") {
+        normalize_i32_field(light_level, "min_inclusive");
+        normalize_i32_field(light_level, "max_inclusive");
+    }
+
+    if let Some(coordinate_scale @ Value::Float(_)) = fields.get_mut("coordinate_scale")
+        && let Value::Float(number) = *coordinate_scale
+    {
+        *coordinate_scale = Value::Double(f64::from(number));
+    }
+}
+
+fn normalize_i32_field(fields: &mut pico_nbt::IndexMap<String, Value>, field: &str) {
+    let Some(value) = fields.get_mut(field) else {
+        return;
+    };
+
+    let normalized = match value {
+        Value::Byte(number) => Some(i32::from(*number)),
+        Value::Short(number) => Some(i32::from(*number)),
+        Value::Long(number) => i32::try_from(*number).ok(),
+        _ => None,
+    };
+    if let Some(number) = normalized {
+        *value = Value::Int(number);
+    }
 }
 
 fn normalize_trim_material(

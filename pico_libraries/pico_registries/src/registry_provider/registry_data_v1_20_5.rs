@@ -87,24 +87,55 @@ mod tests {
         protocol_version: ProtocolVersion,
         entry_id: &str,
     ) -> Result<Value, Box<dyn Error>> {
+        registry_entry(protocol_version, "minecraft:trim_material", entry_id)
+    }
+
+    fn registry_entry(
+        protocol_version: ProtocolVersion,
+        registry_id: &str,
+        entry_id: &str,
+    ) -> Result<Value, Box<dyn Error>> {
         let provider = RuntimeRegistryProvider::new(&generated_data_path(), protocol_version)?;
         let registries = provider.get_registry_data_v1_20_5()?;
         let (_, entries) = registries
             .iter()
-            .find(|(registry_id, _)| registry_id.to_string() == "minecraft:trim_material")
-            .ok_or_else(|| test_error("trim material registry should be present"))?;
+            .find(|(candidate, _)| candidate.to_string() == registry_id)
+            .ok_or_else(|| test_error("registry should be present"))?;
         let entry = entries
             .iter()
             .find(|entry| entry.entry_id.to_string() == entry_id)
-            .ok_or_else(|| test_error("trim material entry should be present"))?;
+            .ok_or_else(|| test_error("registry entry should be present"))?;
         let bytes = entry
             .nbt_bytes
             .as_ref()
-            .ok_or_else(|| test_error("trim material entry should have NBT data"))?;
+            .ok_or_else(|| test_error("registry entry should have NBT data"))?;
         let (_, value) =
             pico_nbt::from_slice_with_options(bytes, NbtOptions::new().nameless_root(true))?;
 
         Ok(value)
+    }
+
+    #[test]
+    fn dimension_type_uses_codec_numeric_types() -> Result<(), Box<dyn Error>> {
+        let value = registry_entry(
+            ProtocolVersion::V26_2,
+            "minecraft:dimension_type",
+            "minecraft:overworld",
+        )?;
+        let fields = value
+            .get_compound()
+            .ok_or_else(|| test_error("dimension type should be a compound"))?;
+
+        assert_eq!(fields.get("height"), Some(&Value::Int(256)));
+        assert_eq!(fields.get("logical_height"), Some(&Value::Int(256)));
+        assert_eq!(fields.get("min_y"), Some(&Value::Int(0)));
+        assert_eq!(
+            fields.get("monster_spawn_block_light_limit"),
+            Some(&Value::Int(0))
+        );
+        assert_eq!(fields.get("coordinate_scale"), Some(&Value::Double(1.0)));
+
+        Ok(())
     }
 
     #[test]
