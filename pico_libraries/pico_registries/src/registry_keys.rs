@@ -11,6 +11,10 @@ pub enum RegistryKeys {
     Root,
     #[registry(id = "minecraft:banner_pattern", min_version = V26_1, is_mandatory = true)]
     BannerPattern,
+    #[registry(id = "minecraft:block_transformer", min_version = V26_3, is_mandatory = true)]
+    BlockTransformer,
+    #[registry(id = "minecraft:decorated_pot_pattern", min_version = V26_3, is_mandatory = true)]
+    DecoratedPotPattern,
     #[registry(id = "minecraft:cat_sound_variant", min_version = V26_1, is_mandatory = true)]
     CatSoundVariant,
     #[registry(id = "minecraft:cat_variant", min_version = V1_21_5, is_mandatory = true)]

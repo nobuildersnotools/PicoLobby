@@ -19,7 +19,7 @@ impl SwingPacket {
             return self.legacy_entity_id == Some(client_entity_id)
                 && self.legacy_animation == Some(Self::LEGACY_MAIN_HAND_ANIMATION);
         }
-        if version == ProtocolVersion::V1_8 {
+        if version == ProtocolVersion::V1_8 || version.is_after_inclusive(ProtocolVersion::V26_3) {
             return true;
         }
         self.hand == Some(Self::MAIN_HAND)
@@ -39,7 +39,7 @@ impl DecodePacket for SwingPacket {
             });
         }
 
-        if version == ProtocolVersion::V1_8 {
+        if version == ProtocolVersion::V1_8 || version.is_after_inclusive(ProtocolVersion::V26_3) {
             return Ok(Self {
                 legacy_entity_id: None,
                 legacy_animation: None,

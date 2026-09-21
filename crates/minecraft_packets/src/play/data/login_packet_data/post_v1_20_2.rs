@@ -1,4 +1,5 @@
 use crate::play::data::death_location::DeathLocation;
+use crate::play::data::global_pos::GlobalPos;
 use minecraft_protocol::prelude::*;
 
 /// Min protocol version for this is 764 or 1.20.2 included
@@ -18,11 +19,20 @@ pub struct PostV1_20_2Data {
     pub dimension_type: Identifier,
     pub dimension_name: Identifier,
     pub hashed_seed: i64,
+    #[pvn(..777)]
     pub game_mode: u8,
+    #[pvn(..777)]
     pub previous_game_mode: i8,
+    #[pvn(777..)]
+    pub v26_3_game_mode: VarInt,
+    #[pvn(777..)]
+    pub v26_3_previous_game_mode: Optional<VarInt>,
     pub is_debug: bool,
     pub is_flat: bool,
+    #[pvn(..777)]
     pub death_location: Optional<DeathLocation>,
+    #[pvn(777..)]
+    pub v26_3_death_location: Optional<GlobalPos>,
     pub portal_cooldown: VarInt,
     #[pvn(768..)]
     pub v1_21_2_sea_level: VarInt,
@@ -47,6 +57,9 @@ impl Default for PostV1_20_2Data {
             v1_20_5_dimension_type: VarInt::new(0),
             game_mode: 3,
             previous_game_mode: -1,
+            v26_3_game_mode: VarInt::new(3),
+            v26_3_previous_game_mode: Optional::None,
+            v26_3_death_location: Optional::None,
             is_debug: false,
             is_flat: true,
             death_location: Optional::None,

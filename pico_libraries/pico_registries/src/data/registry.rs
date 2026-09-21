@@ -5,11 +5,23 @@ use crate::data::tag::Tag;
 use crate::registry_keys::RegistryKeys;
 use crate::reports::registries_report::RegistriesReport;
 use pico_identifier::Identifier;
-use serde::Serialize;
+use pico_nbt::{Value, from_value};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::DirEntry;
 use std::path::Path;
 use walkdir::WalkDir;
+
+#[derive(Deserialize)]
+pub(super) struct NbtTagData {
+    value: Vec<NbtTagEntry>,
+}
+
+#[derive(Deserialize)]
+struct NbtTagEntry {
+    identifier: Identifier,
+    ids: Vec<u32>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct Registry {
@@ -20,6 +32,62 @@ pub struct Registry {
 }
 
 impl Registry {
+    pub(super) fn from_nbt(
+        registry_key: &RegistryKeys,
+        data: Value,
+        tag_data: Option<NbtTagData>,
+    ) -> crate::Result<Self> {
+        let key = RegistryKey::of_registry(registry_key.id());
+        let mut entries = HashMap::new();
+        let mut identifiers = HashMap::new();
+        // Keep each element as the original Value. Deserializing Value through
+        // serde's untagged enum can turn byte arrays into strings, numeric
+        // arrays into lists, and narrow numeric tags to different types.
+        let Value::Compound(mut registry) = data else {
+            return Err(crate::Error::Nbt);
+        };
+        let Some(Value::List(raw_entries)) = registry.swap_remove("value") else {
+            return Err(crate::Error::Nbt);
+        };
+        for raw_entry in raw_entries {
+            let Value::Compound(mut fields) = raw_entry else {
+                return Err(crate::Error::Nbt);
+            };
+            let name: Identifier =
+                from_value(fields.swap_remove("name").ok_or(crate::Error::Nbt)?)?;
+            let id: u32 = from_value(fields.swap_remove("id").ok_or(crate::Error::Nbt)?)?;
+            let element = fields.swap_remove("element").ok_or(crate::Error::Nbt)?;
+            let value = if *registry_key == RegistryKeys::DimensionType {
+                RegistryEntryValue::DimensionType(from_value(element.clone())?)
+            } else {
+                RegistryEntryValue::Other
+            };
+            identifiers.insert(id, name.clone());
+            let entry_key = RegistryKey::new(registry_key.id(), name.clone());
+            entries.insert(
+                name,
+                RegistryEntry::new(value, Some(element), entry_key, id),
+            );
+        }
+        let mut tags = HashMap::new();
+        if let Some(tag_data) = tag_data {
+            for tag in tag_data.value {
+                let values = tag
+                    .ids
+                    .iter()
+                    .map(|id| {
+                        identifiers
+                            .get(id)
+                            .cloned()
+                            .ok_or(crate::Error::UnknownRegistryEntry)
+                    })
+                    .collect::<crate::Result<Vec<_>>>()?;
+                tags.insert(tag.identifier, Tag::new(values));
+            }
+        }
+        Ok(Self { entries, key, tags })
+    }
+
     /// Gets a registry entry
     ///
     /// # Errors

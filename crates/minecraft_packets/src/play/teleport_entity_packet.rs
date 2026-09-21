@@ -112,15 +112,43 @@ impl EncodePacket for EntityPositionSyncPacket {
         version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         self.entity_id.encode(writer, version)?;
+        if version.is_after_inclusive(ProtocolVersion::V26_3) {
+            VarInt::new(1).encode(writer, version)?; // Stepped position
+            VarInt::new(1).encode(writer, version)?; // One step
+        }
         self.x.encode(writer, version)?;
         self.y.encode(writer, version)?;
         self.z.encode(writer, version)?;
-        self.velocity_x.encode(writer, version)?;
-        self.velocity_y.encode(writer, version)?;
-        self.velocity_z.encode(writer, version)?;
+        if version.is_after_inclusive(ProtocolVersion::V26_3) {
+            VarInt::new(3).encode(writer, version)?; // Interpolate over three ticks
+        } else {
+            self.velocity_x.encode(writer, version)?;
+            self.velocity_y.encode(writer, version)?;
+            self.velocity_z.encode(writer, version)?;
+        }
         self.yaw.encode(writer, version)?;
         self.pitch.encode(writer, version)?;
         self.on_ground.encode(writer, version)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn position_sync_26_3_uses_stepped_positions() {
+        let packet = EntityPositionSyncPacket::absolute(1, 0.0, 0.0, 0.0, 0.0, 0.0, true);
+        let mut writer = BinaryWriter::default();
+        packet.encode(&mut writer, ProtocolVersion::V26_3).unwrap();
+        let mut expected = vec![1, 1, 1]; // Entity, stepped mode, step count
+        expected.extend([0; 24]); // XYZ
+        expected.push(3); // Step duration
+        expected.extend([0; 8]); // Rotation
+        expected.push(1); // On ground
+        assert_eq!(writer.as_slice(), expected);
+        let mut legacy = BinaryWriter::default();
+        packet.encode(&mut legacy, ProtocolVersion::V26_2).unwrap();
+        assert_eq!(legacy.as_slice().len(), 58);
     }
 }

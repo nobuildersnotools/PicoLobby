@@ -42,9 +42,11 @@ impl PrecomputedRegistries {
 /// representation used as a key in `ITEM_IDS`.
 fn item_registry_bucket(version: ProtocolVersion) -> &'static str {
     use ProtocolVersion::{
-        V1_17, V1_18, V1_19, V1_20, V1_21, V1_21_2, V1_21_5, V1_21_9, V1_21_11, V26_1, V26_2,
+        V1_17, V1_18, V1_19, V1_20, V1_21, V1_21_2, V1_21_5, V1_21_9, V1_21_11, V26_1, V26_2, V26_3,
     };
-    if version.is_after_inclusive(V26_2) {
+    if version.is_after_inclusive(V26_3) {
+        "V26_3"
+    } else if version.is_after_inclusive(V26_2) {
         "V26_2"
     } else if version.is_after_inclusive(V26_1) {
         "V26_1"
@@ -511,7 +513,7 @@ impl RegistryProvider for PrecomputedRegistries {
             height: info.height,
             min_y: info.min_y,
             protocol_id: info.protocol_id,
-            registry_key: Identifier::vanilla_unchecked(info.registry_key),
+            registry_key: Identifier::try_from(info.registry_key)?,
         })
     }
 
@@ -561,5 +563,78 @@ impl RegistryProvider for PrecomputedRegistries {
             .collect();
 
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_macros)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn minecraft_26_3_bundled_payloads_match_runtime_registry_data() {
+        let version = ProtocolVersion::V26_3;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/generated");
+        let runtime =
+            pico_registries::registry_provider::RuntimeRegistryProvider::new(&root, version)
+                .unwrap()
+                .get_registry_data_v1_20_5()
+                .unwrap();
+        let bundled = PrecomputedRegistries::new(version)
+            .get_registry_data_v1_20_5()
+            .unwrap();
+        assert_eq!(runtime.len(), bundled.len());
+        for ((runtime_id, runtime_entries), (bundled_id, bundled_entries)) in
+            runtime.iter().zip(&bundled)
+        {
+            assert_eq!(runtime_id, bundled_id);
+            assert_eq!(runtime_entries.len(), bundled_entries.len());
+            for (runtime_entry, bundled_entry) in runtime_entries.iter().zip(bundled_entries) {
+                assert_eq!(runtime_entry.entry_id, bundled_entry.entry_id);
+                assert_eq!(
+                    runtime_entry.nbt_bytes, bundled_entry.nbt_bytes,
+                    "bundled NBT changed for {runtime_id}/{}",
+                    runtime_entry.entry_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn minecraft_26_3_registries_and_dimensions_are_complete() {
+        let provider = PrecomputedRegistries::new(ProtocolVersion::V26_3);
+        assert_eq!(provider.resolve_item_id("minecraft:compass"), Some(1151));
+        assert_eq!(
+            provider.resolve_item_id("minecraft:player_head"),
+            Some(1386)
+        );
+        let registries = provider.get_registry_data_v1_20_5().unwrap();
+        for name in [
+            "block_transformer",
+            "decorated_pot_pattern",
+            "instrument",
+            "timeline",
+        ] {
+            let (_, entries) = registries.iter().find(|(id, _)| id.thing == name).unwrap();
+            assert!(!entries.is_empty(), "missing {name} entries");
+            assert!(entries.iter().all(|entry| entry.nbt_bytes.is_some()));
+        }
+        assert!(!registries.iter().any(|(id, _)| id.thing == "block"));
+        for dimension in [Dimension::Overworld, Dimension::Nether, Dimension::End] {
+            let info = provider.get_dimension_info(dimension).unwrap();
+            assert!(info.height > 0);
+            assert_eq!(info.registry_key, dimension.identifier());
+        }
+        assert!(
+            provider
+                .get_biome_protocol_id(&Identifier::vanilla_unchecked("plains"))
+                .is_ok()
+        );
+        let tags = provider.get_tagged_registries().unwrap();
+        assert!(
+            tags.iter()
+                .any(|registry| registry.registry_id.thing == "timeline"
+                    && !registry.tags.is_empty())
+        );
     }
 }

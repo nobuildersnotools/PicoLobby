@@ -331,6 +331,8 @@ mod tests {
             ProtocolVersion::V1_21_7,
             ProtocolVersion::V1_21_9,
             ProtocolVersion::V1_21_11,
+            ProtocolVersion::V26_2,
+            ProtocolVersion::V26_3,
         ] {
             // Given
             let registry_provider = PrecomputedRegistries::new(protocol_version);
@@ -412,6 +414,8 @@ mod tests {
             ProtocolVersion::V1_21_7,
             ProtocolVersion::V1_21_9,
             ProtocolVersion::V1_21_11,
+            ProtocolVersion::V26_2,
+            ProtocolVersion::V26_3,
         ] {
             let registry_provider = PrecomputedRegistries::new(protocol_version);
             let registries = registry_provider.get_registry_data_v1_20_5().unwrap();

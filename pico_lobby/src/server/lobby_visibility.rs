@@ -315,20 +315,30 @@ pub fn swing_visibility_batches(plan: &LobbySwingPlan) -> Vec<LobbySwingPacketBa
         })
         .map(|recipient| LobbySwingPacketBatch {
             recipient: recipient.clone(),
-            packets: swing_visibility_packets(plan.swinging_entity_id),
+            packets: swing_visibility_packets_inline(
+                plan.swinging_entity_id,
+                recipient.protocol_version,
+            )
+            .into_vec(),
         })
         .collect()
 }
 
 #[cfg(test)]
 pub fn swing_visibility_packets(swinging_entity_id: EntityId) -> Vec<PacketRegistry> {
-    swing_visibility_packets_inline(swinging_entity_id).into_vec()
+    swing_visibility_packets_inline(swinging_entity_id, ProtocolVersion::V26_2).into_vec()
 }
 
-pub fn swing_visibility_packets_inline(swinging_entity_id: EntityId) -> PacketList {
-    PacketList::One(PacketRegistry::Animate(AnimatePacket::main_hand(
-        swinging_entity_id.get(),
-    )))
+pub fn swing_visibility_packets_inline(
+    swinging_entity_id: EntityId,
+    version: ProtocolVersion,
+) -> PacketList {
+    let packet = AnimatePacket::main_hand(swinging_entity_id.get());
+    PacketList::One(if version.is_after_inclusive(ProtocolVersion::V26_3) {
+        PacketRegistry::SwingAnimation(packet)
+    } else {
+        PacketRegistry::Animate(packet)
+    })
 }
 
 fn teleport_visibility_packet(

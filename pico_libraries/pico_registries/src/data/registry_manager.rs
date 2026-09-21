@@ -1,5 +1,6 @@
-use crate::data::registry::Registry;
+use crate::data::registry::{NbtTagData, Registry};
 use crate::registry_keys::RegistryKeys;
+use pico_nbt::{NbtOptions, Value, from_path_with_options, from_value};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
@@ -61,6 +62,9 @@ impl RegistryManagerBuilder {
     /// # Errors
     /// Returns an error if a mandatory registry cannot be loaded.
     pub fn load_from_resource_path(self, resource_path: &Path) -> crate::Result<RegistryManager> {
+        if resource_path.join("registries.nbt").exists() {
+            return self.load_from_nbt_files(resource_path);
+        }
         let data_path = resource_path.join("data");
         let mut registries = HashMap::new();
         for registry_key in &self.registry_keys {
@@ -76,6 +80,29 @@ impl RegistryManagerBuilder {
                     );
                 }
             }
+        }
+        Ok(RegistryManager { registries })
+    }
+
+    fn load_from_nbt_files(self, resource_path: &Path) -> crate::Result<RegistryManager> {
+        let options = NbtOptions::new().nameless_root(true);
+        let (_, data) = from_path_with_options(resource_path.join("registries.nbt"), options)?;
+        let Value::Compound(mut data) = data else {
+            return Err(crate::Error::Nbt);
+        };
+        let (_, tags) = from_path_with_options(resource_path.join("tags.nbt"), options)?;
+        let mut tags: HashMap<String, NbtTagData> = from_value(tags)?;
+        let mut registries = HashMap::new();
+        for key in self.registry_keys {
+            let id = key.id().to_string();
+            let Some(data) = data.swap_remove(&id) else {
+                if key.is_mandatory() {
+                    return Err(crate::Error::UnknownRegistry);
+                }
+                continue;
+            };
+            let registry = Registry::from_nbt(&key, data, tags.remove(&id))?;
+            registries.insert(key, registry);
         }
         Ok(RegistryManager { registries })
     }

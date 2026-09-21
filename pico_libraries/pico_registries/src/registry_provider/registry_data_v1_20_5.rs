@@ -116,6 +116,27 @@ mod tests {
     }
 
     #[test]
+    fn block_transformer_payloads_preserve_captured_nbt_types() -> Result<(), Box<dyn Error>> {
+        let (_, captured) = pico_nbt::from_path_with_options(
+            generated_data_path().join("V26_3/registries.nbt"),
+            NbtOptions::new().nameless_root(true),
+        )?;
+        let entries = captured.get_compound().unwrap()["minecraft:block_transformer"]
+            .get_compound()
+            .unwrap()["value"]
+            .get_list()
+            .unwrap();
+        for entry in entries {
+            let fields = entry.get_compound().unwrap();
+            let name = fields["name"].get_str().unwrap();
+            let emitted =
+                registry_entry(ProtocolVersion::V26_3, "minecraft:block_transformer", name)?;
+            assert_eq!(emitted, fields["element"], "NBT changed for {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn dimension_type_uses_codec_numeric_types() -> Result<(), Box<dyn Error>> {
         let value = registry_entry(
             ProtocolVersion::V26_2,

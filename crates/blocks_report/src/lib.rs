@@ -102,6 +102,7 @@ mod tests {
             ProtocolVersion::V1_16,
             ProtocolVersion::V1_21,
             ProtocolVersion::V26_2,
+            ProtocolVersion::V26_3,
         ] {
             assert_eq!(native_id("minecraft:air", version), 0, "air on {version:?}");
             assert_eq!(
@@ -118,7 +119,7 @@ mod tests {
         // should resolve to a real native id; a low ratio means the canonical
         // identifier format drifted from the generator's.
         let mapping = load_internal_mapping().expect("internal mapping");
-        let report = get_block_report_id_mapping(ProtocolVersion::V26_2).expect("report mapping");
+        let report = get_block_report_id_mapping(ProtocolVersion::V26_3).expect("report mapping");
         let (mut total, mut non_air) = (0u32, 0u32);
         for block in mapping.mapping.inner() {
             for state in block.states.inner() {
@@ -183,6 +184,7 @@ mod tests {
             ProtocolVersion::V1_15_2,
             ProtocolVersion::V1_20_2,
             ProtocolVersion::V26_2,
+            ProtocolVersion::V26_3,
         ] {
             assert!(
                 get_block_report_id_mapping(version).is_ok(),

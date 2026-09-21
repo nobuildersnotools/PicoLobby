@@ -5,6 +5,7 @@ use std::cmp::PartialEq;
 #[repr(i32)]
 pub enum ProtocolVersion {
     #[default]
+    V26_3 = 777,
     V26_2 = 776,
     V26_1 = 775,
     #[pvn(packets = V1_21_9)]
@@ -150,6 +151,18 @@ impl ProtocolVersion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minecraft_26_3_is_latest_stable() {
+        assert_eq!(
+            ProtocolVersion::try_from(777).unwrap(),
+            ProtocolVersion::V26_3
+        );
+        assert_eq!(ProtocolVersion::default(), ProtocolVersion::V26_3);
+        assert_eq!(ProtocolVersion::latest(), ProtocolVersion::V26_3);
+        assert_eq!(ProtocolVersion::V26_3.humanize(), "26.3");
+        assert!(ProtocolVersion::V26_3 > ProtocolVersion::V26_2);
+    }
 
     #[test]
     fn test_protocol_version_ordering() {

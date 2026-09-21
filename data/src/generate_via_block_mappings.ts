@@ -49,7 +49,7 @@ const OUT_DIR = join(process.cwd(), "generated", "Any", "via");
 // with real per-version block tables from minecraft-data and substitute a
 // visually similar block that did exist (see LEGACY_TARGETS / substitute()).
 const CHAIN = [
-    "26.2", "26.1", "1.21.11", "1.21.9", "1.21.7", "1.21.6", "1.21.5", "1.21.4",
+    "26.3", "26.2", "26.1", "1.21.11", "1.21.9", "1.21.7", "1.21.6", "1.21.5", "1.21.4",
     "1.21.2", "1.21", "1.20.5", "1.20.3", "1.20.2", "1.20", "1.19.4", "1.19.3",
     "1.19", "1.18", "1.17", "1.16.2", "1.16", "1.15", "1.14", "1.13.2", "1.13",
     "1.12",
@@ -63,6 +63,7 @@ const PRE_FLATTENING = new Set(["1.12"]);
 // block table it should use. Sub-versions that share block states with a release
 // Via does not publish separately are folded onto the nearest published version.
 const VARIANT_TO_VIA: Record<string, string> = {
+    V26_3: "26.3",
     V26_2: "26.2",
     V26_1: "26.1",
     V1_21_11: "1.21.11",

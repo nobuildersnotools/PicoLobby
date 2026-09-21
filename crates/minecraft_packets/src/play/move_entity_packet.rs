@@ -93,6 +93,11 @@ impl EncodePacket for MoveEntityPosPacket {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         encode_entity_id(&self.entity_id, writer, protocol_version)?;
+        if protocol_version.is_after_inclusive(ProtocolVersion::V26_3) {
+            // One interpolation step; bit 0 is on-ground, bit 1 omits the step count.
+            VarInt::new(2 | i32::from(self.on_ground)).encode(writer, protocol_version)?;
+            VarInt::new(3).encode(writer, protocol_version)?;
+        }
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_8) {
             legacy_scaled_delta_from_modern_units(self.delta_x).encode(writer, protocol_version)?;
             legacy_scaled_delta_from_modern_units(self.delta_y).encode(writer, protocol_version)?;
@@ -102,7 +107,7 @@ impl EncodePacket for MoveEntityPosPacket {
             self.delta_y.encode(writer, protocol_version)?;
             self.delta_z.encode(writer, protocol_version)?;
         }
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        if protocol_version.between_inclusive(ProtocolVersion::V1_8, ProtocolVersion::V26_2) {
             self.on_ground.encode(writer, protocol_version)?;
         }
         Ok(())
@@ -146,6 +151,11 @@ impl EncodePacket for MoveEntityPosRotPacket {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         encode_entity_id(&self.entity_id, writer, protocol_version)?;
+        if protocol_version.is_after_inclusive(ProtocolVersion::V26_3) {
+            // One interpolation step; bit 0 is on-ground, bit 1 omits the step count.
+            VarInt::new(2 | i32::from(self.on_ground)).encode(writer, protocol_version)?;
+            VarInt::new(3).encode(writer, protocol_version)?;
+        }
         if protocol_version.is_before_inclusive(ProtocolVersion::V1_8) {
             legacy_scaled_delta_from_modern_units(self.delta_x).encode(writer, protocol_version)?;
             legacy_scaled_delta_from_modern_units(self.delta_y).encode(writer, protocol_version)?;
@@ -157,7 +167,7 @@ impl EncodePacket for MoveEntityPosRotPacket {
         }
         self.yaw.encode(writer, protocol_version)?;
         self.pitch.encode(writer, protocol_version)?;
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        if protocol_version.between_inclusive(ProtocolVersion::V1_8, ProtocolVersion::V26_2) {
             self.on_ground.encode(writer, protocol_version)?;
         }
         Ok(())
@@ -189,9 +199,12 @@ impl EncodePacket for MoveEntityRotPacket {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         encode_entity_id(&self.entity_id, writer, protocol_version)?;
+        if protocol_version.is_after_inclusive(ProtocolVersion::V26_3) {
+            self.on_ground.encode(writer, protocol_version)?;
+        }
         self.yaw.encode(writer, protocol_version)?;
         self.pitch.encode(writer, protocol_version)?;
-        if protocol_version.is_after_inclusive(ProtocolVersion::V1_8) {
+        if protocol_version.between_inclusive(ProtocolVersion::V1_8, ProtocolVersion::V26_2) {
             self.on_ground.encode(writer, protocol_version)?;
         }
         Ok(())
@@ -217,6 +230,36 @@ pub fn encode_angle(angle: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movement_layout_changes_at_26_3() {
+        let delta = RelativeMoveDelta::new_unchecked(1, -2, 3);
+        for (version, expected) in [
+            (ProtocolVersion::V26_2, vec![1, 0, 1, 255, 254, 0, 3, 1]),
+            (ProtocolVersion::V26_3, vec![1, 3, 3, 0, 1, 255, 254, 0, 3]),
+        ] {
+            let mut writer = BinaryWriter::default();
+            MoveEntityPosPacket::new(1, delta, true)
+                .encode(&mut writer, version)
+                .unwrap();
+            assert_eq!(writer.as_slice(), expected, "{version:?}");
+        }
+        let mut writer = BinaryWriter::default();
+        MoveEntityPosRotPacket::new(1, delta, 90.0, 180.0, false)
+            .encode(&mut writer, ProtocolVersion::V26_3)
+            .unwrap();
+        assert_eq!(writer.as_slice(), &[1, 2, 3, 0, 1, 255, 254, 0, 3, 64, 128]);
+        for (version, expected) in [
+            (ProtocolVersion::V26_2, [1, 64, 128, 1]),
+            (ProtocolVersion::V26_3, [1, 1, 64, 128]),
+        ] {
+            let mut writer = BinaryWriter::default();
+            MoveEntityRotPacket::new(1, 90.0, 180.0, true)
+                .encode(&mut writer, version)
+                .unwrap();
+            assert_eq!(writer.as_slice(), expected);
+        }
+    }
 
     #[test]
     fn encodes_common_angles() {

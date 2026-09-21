@@ -143,6 +143,7 @@ impl LoginPacket {
             }
             LoginPacketData::PostV1_20_2(value) => {
                 value.game_mode = game_mode;
+                value.v26_3_game_mode = VarInt::new(i32::from(game_mode));
                 value.is_hardcore = is_hard_core;
             }
         }
@@ -564,6 +565,21 @@ mod tests {
                 entity_id: 0,
                 data: LoginPacketData::PreV1_16(PreV1_16Data::default()),
             }
+        }
+    }
+
+    #[test]
+    fn login_game_mode_layout_changes_at_26_3() {
+        for (version, previous) in [(ProtocolVersion::V26_2, 255), (ProtocolVersion::V26_3, 0)] {
+            let packet = LoginPacket::with_dimension_index(Dimension::Overworld, 0)
+                .set_game_mode(version, 2, false);
+            let mut writer = BinaryWriter::default();
+            packet.encode(&mut writer, version).unwrap();
+            let bytes = writer.as_slice();
+            assert_eq!(
+                &bytes[bytes.len() - 9..],
+                &[2, previous, 0, 1, 0, 0, 63, 0, 1]
+            );
         }
     }
 

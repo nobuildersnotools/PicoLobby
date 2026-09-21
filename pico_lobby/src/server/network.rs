@@ -489,8 +489,8 @@ async fn broadcast_swing(plan: &LobbySwingPlan, server_state: &Arc<RwLock<Server
     let buckets = server_state_guard.bucket_lobby_broadcast_senders_by_version(&plan.recipients);
     drop(server_state_guard);
 
-    queue_version_bucketed_packets(&buckets, "swing", |_| {
-        swing_visibility_packets_inline(plan.swinging_entity_id)
+    queue_version_bucketed_packets(&buckets, "swing", |version| {
+        swing_visibility_packets_inline(plan.swinging_entity_id, version)
     });
 }
 

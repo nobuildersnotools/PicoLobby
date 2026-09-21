@@ -8,6 +8,10 @@ pub struct Tag {
 }
 
 impl Tag {
+    pub(super) const fn new(values: Vec<Identifier>) -> Self {
+        Self { values }
+    }
+
     #[must_use]
     pub fn get_values(&self) -> &[Identifier] {
         &self.values

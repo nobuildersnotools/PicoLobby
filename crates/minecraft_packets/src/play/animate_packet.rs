@@ -24,7 +24,13 @@ impl EncodePacket for AnimatePacket {
         protocol_version: ProtocolVersion,
     ) -> Result<(), BinaryWriterError> {
         encode_entity_id(&self.entity_id, writer, protocol_version)?;
-        self.animation_id.encode(writer, protocol_version)
+        if protocol_version.is_after_inclusive(ProtocolVersion::V26_3) {
+            VarInt::new(0).encode(writer, protocol_version)?; // Main hand
+            VarInt::new(1).encode(writer, protocol_version)?; // Whack animation
+            VarInt::new(6).encode(writer, protocol_version)
+        } else {
+            self.animation_id.encode(writer, protocol_version)
+        }
     }
 }
 

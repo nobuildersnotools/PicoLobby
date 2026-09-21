@@ -435,6 +435,13 @@ pub enum PacketRegistry {
     #[protocol_id(
         state = "play",
         bound = "clientbound",
+        name = "minecraft:swing_animation"
+    )]
+    SwingAnimation(AnimatePacket),
+
+    #[protocol_id(
+        state = "play",
+        bound = "clientbound",
         name = "minecraft:set_entity_data"
     )]
     SetEntityMetadata(SetEntityMetadataPacket),
@@ -592,6 +599,9 @@ pub enum PacketRegistry {
     #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:swing")]
     Swing(SwingPacket),
 
+    #[protocol_id(state = "play", bound = "serverbound", name = "minecraft:punch")]
+    Punch(SwingPacket),
+
     #[protocol_id(
         state = "play",
         bound = "serverbound",
@@ -648,7 +658,7 @@ impl PacketHandler for PacketRegistry {
             Self::PlayerAction(packet) => packet.handle(client_state, server_state),
             Self::Interact(packet) => packet.handle(client_state, server_state),
             Self::Attack(packet) => packet.handle(client_state, server_state),
-            Self::Swing(packet) => packet.handle(client_state, server_state),
+            Self::Swing(packet) | Self::Punch(packet) => packet.handle(client_state, server_state),
             _ => Err(PacketHandlerError::custom("Unhandled packet")),
         }
     }
@@ -660,6 +670,23 @@ mod tests {
     use minecraft_packets::play::VoidChunkContext;
     use minecraft_protocol::prelude::{BinaryReader, DecodePacket, Uuid, VarInt};
     use pico_text_component::prelude::Component;
+
+    #[test]
+    fn minecraft_26_3_swing_uses_new_packets() {
+        let version = ProtocolVersion::V26_3;
+        let raw = PacketRegistry::SwingAnimation(AnimatePacket::main_hand(300))
+            .encode_packet(version)
+            .unwrap();
+        assert_eq!(raw.packet_id(), Some(123));
+        assert_eq!(raw.data(), &[172, 2, 0, 1, 6]);
+        let raw = RawPacket::from_bytes(46, &[]);
+        let PacketRegistry::Punch(packet) =
+            PacketRegistry::decode_packet(version, State::Play, raw).unwrap()
+        else {
+            panic!("expected punch");
+        };
+        assert!(packet.triggers_main_hand_swing(300, version));
+    }
 
     #[test]
     fn decodes_set_player_rotation_packet_ids_across_versions() {

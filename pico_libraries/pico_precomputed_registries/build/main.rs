@@ -39,7 +39,10 @@ fn versions_with_registries() -> impl Iterator<Item = &'static ProtocolVersion> 
         .filter(|v| v.has_registries())
 }
 
+#[allow(clippy::disallowed_macros)] // Cargo build-script directives use stdout.
 fn main() -> anyhow::Result<()> {
+    println!("cargo:rerun-if-changed=../../data/generated");
+    println!("cargo:rerun-if-changed=build");
     let out_dir = env::var("OUT_DIR")?;
     let dest_path = Path::new(&out_dir).join("precomputed_registries.rs");
     let mut file = BufWriter::new(File::create(&dest_path)?);
