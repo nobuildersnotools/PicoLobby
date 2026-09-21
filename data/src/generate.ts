@@ -129,15 +129,15 @@ async function copyCompatibilityTrimMaterials(): Promise<void> {
     }
 }
 
-const move = async (
+async function move(
     from: string,
     to: string,
     subdir: string,
-): Promise<string> => {
+): Promise<string> {
     const destination = join(to, subdir);
     await copyDir(join(from, subdir), destination);
     return destination;
-};
+}
 
 async function copyDir(src: string, dest: string): Promise<void> {
     const entries = await readdir(src, {

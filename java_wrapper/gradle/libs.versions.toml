@@ -1,7 +1,7 @@
 [versions]
-jna = "5.18.1"
-velocity = "3.4.0-SNAPSHOT"
-bungeecord = "1.21-R0.4-SNAPSHOT"
+jna = "5.19.1"
+velocity = "3.5.1"
+bungeecord = "26.1-R0.1-SNAPSHOT"
 
 [libraries]
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }

@@ -16,7 +16,7 @@
         "node": ">23.6"
     },
     "devDependencies": {
-        "@types/node": "^22.13.1",
-        "typescript": "5.8.0-beta"
+        "@types/node": "26.6.2",
+        "typescript": "7.0.2"
     }
 }

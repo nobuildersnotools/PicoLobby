@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -181,7 +182,7 @@ const SUPPORTED_VERSIONS = [
 ];
 
 function generateLauncherProfiles() {
-    const minecraftHome = join(process.env.HOME, ".other_minecraft");
+    const minecraftHome = join(homedir(), ".other_minecraft");
     return SUPPORTED_VERSIONS.map(({ pvn, version }) => {
         const created = new Date().toISOString();
         return [
@@ -204,7 +205,7 @@ function generateLauncherProfiles() {
 }
 
 (async () => {
-    const minecraftHome = join(process.env.HOME, ".minecraft");
+    const minecraftHome = join(homedir(), ".minecraft");
     const launcherProfiles = join(minecraftHome, "launcher_profiles.json");
     await copyFile(launcherProfiles, `${launcherProfiles}.backup`);
     const currentProfiles = JSON.parse(

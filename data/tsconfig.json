@@ -1,5 +1,6 @@
 {
     "compilerOptions": {
+        "types": ["node"],
         "lib": ["ESNext", "DOM"],
         "target": "ES2024",
         "erasableSyntaxOnly": true,
